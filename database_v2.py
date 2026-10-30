@@ -289,3 +289,41 @@ def get_distributor_payments_df() -> pd.DataFrame:
         df = pd.DataFrame()
     conn.close()
     return df
+# Add to database_v2.py
+
+def bulk_save_purchase_invoices(df_invoices):
+    """Saves a dataframe of parsed purchase bills in bulk."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    success_count = 0
+    for _, row in df_invoices.iterrows():
+        try:
+            party_name = str(row['party_name']).strip().title()
+            inv_no = str(row['invoice_number']).strip()
+            inv_date = str(row['invoice_date']).strip()
+            amount = float(row['bill_amount'])
+            
+            # Find party_id
+            cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
+            party_row = cursor.fetchone()
+            
+            if party_row:
+                p_id, credit_days = party_row[0], party_row[1]
+                
+                # Compute due date
+                inv_dt = datetime.strptime(inv_date[:10], "%Y-%m-%d")
+                due_dt = inv_dt + timedelta(days=int(credit_days))
+                due_date_str = due_dt.strftime("%Y-%m-%d")
+                
+                cursor.execute("""
+                    INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
+                """, (p_id, inv_no, inv_date[:10], due_date_str, amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                success_count += 1
+        except Exception as e:
+            print(f"Skipping row due to error: {e}")
+            
+    conn.commit()
+    conn.close()
+    return success_count
