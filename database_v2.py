@@ -327,3 +327,38 @@ def bulk_save_purchase_invoices(df_invoices):
     conn.commit()
     conn.close()
     return success_count
+# --- Add to database_v2.py ---
+
+def bulk_save_parties(df_parties):
+    """Saves a dataframe of parties and opening balances in bulk."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    success_count = 0
+    for _, row in df_parties.iterrows():
+        try:
+            name = str(row['party_name']).strip().title()
+            phone = str(row.get('phone', '')).strip()
+            gstin = str(row.get('gstin', '')).strip().upper()
+            credit_days = int(row.get('credit_period_days', 15))
+            opening_bal = float(row.get('opening_balance', 0.0))
+            as_on_date = str(row.get('as_on_date', datetime.now().strftime("%Y-%m-%d"))).strip()[:10]
+            created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("""
+                INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(party_name) DO UPDATE SET
+                phone=excluded.phone,
+                gstin=excluded.gstin,
+                credit_period_days=excluded.credit_period_days,
+                opening_balance=excluded.opening_balance,
+                as_on_date=excluded.as_on_date
+            """, (name, phone, gstin, credit_days, opening_bal, as_on_date, created_date))
+            success_count += 1
+        except Exception as e:
+            print(f"Skipping party row due to error: {e}")
+            
+    conn.commit()
+    conn.close()
+    return success_count
