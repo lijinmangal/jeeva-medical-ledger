@@ -376,3 +376,33 @@ with st.expander("📤 Bulk Upload Purchase Bills via Excel / CSV"):
                     st.error(f"Missing required columns in your file. Your file must contain: {required_cols}")
         except Exception as e:
             st.error(f"Error reading file: {e}")
+# --- Add inside Tab 1 of app_v2.py ---
+
+    st.divider()
+    with st.expander("📤 Bulk Upload Parties & Opening Balances via Excel / CSV"):
+        st.markdown("""
+        Upload an Excel or CSV file containing your distributor master list. Your file must include a column named `party_name`. Optional columns include: 
+        `phone`, `gstin`, `credit_period_days`, `opening_balance`, and `as_on_date` (YYYY-MM-DD).
+        """)
+        
+        uploaded_party_file = st.file_uploader("Upload Party Excel/CSV File", type=["xlsx", "xls", "csv"], key="party_uploader")
+        
+        if uploaded_party_file:
+            try:
+                if uploaded_party_file.name.endswith('.csv'):
+                    df_party_upload = pd.read_csv(uploaded_party_file)
+                else:
+                    df_party_upload = pd.read_excel(uploaded_party_file)
+                    
+                st.write("### Preview Uploaded Parties:")
+                st.dataframe(df_party_upload.head(), use_container_width=True)
+                
+                if st.button("🚀 Process & Import Parties in Bulk"):
+                    if 'party_name' in df_party_upload.columns:
+                        count = bulk_save_parties(df_party_upload)
+                        st.success(f"Successfully imported/updated {count} parties with their opening balances!")
+                        st.rerun()
+                    else:
+                        st.error("Missing required column: Your file must contain a `party_name` column.")
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
