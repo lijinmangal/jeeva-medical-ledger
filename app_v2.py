@@ -348,3 +348,31 @@ with tab5:
             st.dataframe(df_payments, use_container_width=True, hide_index=True)
         else:
             st.info("No distributor payments recorded yet.")
+# Add this code block as a new tab or section in app_v2.py
+
+with st.expander("📤 Bulk Upload Purchase Bills via Excel / CSV"):
+    st.markdown("Upload your billing software export file. Ensure your columns match: `party_name`, `invoice_number`, `invoice_date`, and `bill_amount`.")
+    
+    uploaded_excel = st.file_uploader("Upload Excel/CSV File", type=["xlsx", "xls", "csv"])
+    
+    if uploaded_excel:
+        try:
+            if uploaded_excel.name.endswith('.csv'):
+                df_upload = pd.read_csv(uploaded_excel)
+            else:
+                df_upload = pd.read_excel(uploaded_excel)
+                
+            st.write("### Preview Uploaded Data:")
+            st.dataframe(df_upload.head(), use_container_width=True)
+            
+            if st.button("🚀 Process & Import Bills in Bulk"):
+                # Basic validation of columns
+                required_cols = ['party_name', 'invoice_number', 'invoice_date', 'bill_amount']
+                if all(col in df_upload.columns for col in required_cols):
+                    count = bulk_save_purchase_invoices(df_upload)
+                    st.success(f"Successfully imported {count} purchase invoices into the system!")
+                    st.rerun()
+                else:
+                    st.error(f"Missing required columns in your file. Your file must contain: {required_cols}")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
