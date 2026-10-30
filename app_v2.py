@@ -7,7 +7,8 @@ from database_v2 import (
     init_clean_database, get_parties_df, save_party,
     get_financial_openings_df, save_financial_opening,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
-    record_balance_correction, get_adjustment_logs
+    record_balance_correction, get_adjustment_logs,
+    record_distributor_payment, get_distributor_payments_df
 )
 
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
@@ -56,11 +57,12 @@ if st.sidebar.button("Logout"):
 # ==========================================
 st.title("💊 Jeeva Medical Store Management System")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 1. Purchase Parties Setup", 
-    "💰 2. Daily Finance Initial Setup",
-    "📦 3. Purchase Bills & Due Alerts",
-    "📊 4. Party-Wise Total Dues"
+    "💰 2. Daily Finance Initial",
+    "📦 3. Purchase Bills & Dues",
+    "📊 4. Total Dues & Breakdown",
+    "💸 5. Record Payment & Clear Bills"
 ])
 
 # ------------------------------------------
@@ -281,3 +283,68 @@ with tab4:
                     st.info("No purchase invoices found in the system.")
     else:
         st.info("No parties or purchase dues found yet. Add parties in Tab 1.")
+
+# ------------------------------------------
+# TAB 5: RECORD PAYMENT & CLEAR BILLS (NEW)
+# ------------------------------------------
+with tab5:
+    st.subheader("💸 Record Distributor Payment & Clear Bills")
+    st.markdown("Pay a distributor via Cash, UPI, or Bank Transfer, and select which unpaid bills are being cleared to update outstanding balances.")
+
+    df_parties = get_parties_df()
+    if df_parties.empty:
+        st.warning("Please register at least one Purchase Party in Tab 1 first.")
+    else:
+        pay_party = st.selectbox("Select Distributor to Pay", df_parties["party_name"].tolist(), key="pay_party_select")
+        party_row = df_parties[df_parties["party_name"] == pay_party].iloc[0]
+        party_id = int(party_row["party_id"])
+
+        # Fetch unpaid bills for this party
+        df_invoices = get_purchase_invoices_df()
+        unpaid_party_bills = pd.DataFrame()
+        if not df_invoices.empty:
+            unpaid_party_bills = df_invoices[(df_invoices["party_id"] == party_id) & (df_invoices["status"] == "UNPAID")]
+
+        selected_invoice_ids = []
+        if not unpaid_party_bills.empty:
+            st.write("### Select Unpaid Bills to Clear")
+            st.caption("Check the bills that are being paid off with this payment.")
+            
+            # Display checkboxes for each unpaid bill
+            for _, bill in unpaid_party_bills.iterrows():
+                checked = st.checkbox(f"Invoice No: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", key=f"inv_chk_{bill['invoice_id']}")
+                if checked:
+                    selected_invoice_ids.append(int(bill['invoice_id']))
+        else:
+            st.info(f"No specific unpaid purchase invoices found for {pay_party}. (Payment will apply towards general balance / opening balance).")
+
+        st.divider()
+        with st.form("payment_form"):
+            pc1, pc2 = st.columns(2)
+            pay_amount = pc1.number_input("Payment Amount Paid (₹) *", min_value=0.0, step=100.0)
+            pay_mode = pc2.selectbox("Payment Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
+            pay_notes = st.text_input("Payment Notes / Transaction Ref No (Optional)")
+
+            submitted_payment = st.form_submit_button("✅ Confirm & Record Payment")
+            if submitted_payment:
+                if pay_amount > 0:
+                    record_distributor_payment(
+                        party_id=party_id,
+                        invoice_ids_to_clear=selected_invoice_ids,
+                        payment_amount=pay_amount,
+                        payment_mode=pay_mode,
+                        notes=pay_notes.strip(),
+                        recorded_by=current_user
+                    )
+                    st.success(f"Successfully recorded payment of ₹{pay_amount:,.2f} to {pay_party}!")
+                    st.rerun()
+                else:
+                    st.error("Please enter a valid payment amount greater than 0.")
+
+        st.divider()
+        st.write("### 📜 Recent Distributor Payment History")
+        df_payments = get_distributor_payments_df()
+        if not df_payments.empty:
+            st.dataframe(df_payments, use_container_width=True, hide_index=True)
+        else:
+            st.info("No distributor payments recorded yet.")
