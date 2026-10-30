@@ -229,3 +229,63 @@ def save_financial_opening(category, desc, amount, nature, created_date):
 
 if __name__ == "__main__":
     init_clean_database()
+
+# --- Add to database_v2.py ---
+
+def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
+    """Records a payment to a distributor, marks selected bills as PAID, and logs the transaction."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    # 1. Insert into payment records table (we can create a table or store it in an audit log / payments table)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS distributor_payments (
+            payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            party_id INTEGER,
+            amount_paid REAL NOT NULL,
+            payment_mode TEXT,
+            notes TEXT,
+            recorded_by TEXT,
+            timestamp TEXT,
+            FOREIGN KEY (party_id) REFERENCES parties (party_id)
+        )
+    """)
+
+    cursor.execute("""
+        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, notes, recorded_by, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (party_id, payment_amount, payment_mode, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
+    # 2. If specific bills were selected to be cleared, update their status to PAID
+    if invoice_ids_to_clear:
+        placeholders = ','.join(['?'] * len(invoice_ids_to_clear))
+        cursor.execute(f"""
+            UPDATE purchase_invoices 
+            SET status = 'PAID' 
+            WHERE invoice_id IN ({placeholders})
+        """, invoice_ids_to_clear)
+
+    conn.commit()
+    conn.close()
+
+def get_distributor_payments_df() -> pd.DataFrame:
+    conn = sqlite3.connect(DB_FILE)
+    query = """
+        SELECT 
+            dp.payment_id,
+            p.party_name,
+            dp.amount_paid,
+            dp.payment_mode,
+            dp.notes,
+            dp.recorded_by,
+            dp.timestamp
+        FROM distributor_payments dp
+        JOIN parties p ON dp.party_id = p.party_id
+        ORDER BY dp.payment_id DESC
+    """
+    try:
+        df = pd.read_sql_query(query, conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
