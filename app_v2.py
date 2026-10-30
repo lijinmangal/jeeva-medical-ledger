@@ -8,13 +8,21 @@ from database_v2 import (
     get_financial_openings_df, save_financial_opening,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
     record_balance_correction, get_adjustment_logs,
-    record_distributor_payment, get_distributor_payments_df
+    record_distributor_payment, get_distributor_payments_df,
+    bulk_save_parties, bulk_save_purchase_invoices
 )
 
-st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
+# Streamlit Page Configuration
+st.set_page_config(
+    page_title="Jeeva Medical Store V2", 
+    page_icon="💊", 
+    layout="wide"
+)
 
+# Initialize Database Tables
 init_clean_database()
 
+# User Credentials & Roles Dictionary
 USERS = {
     "admin": {"pin": "1234", "role": "Owner"},
     "staff1": {"pin": "1111", "role": "Counter Staff"},
@@ -42,21 +50,36 @@ if not st.session_state.logged_in_user:
     st.stop()
 
 # ==========================================
-# 2. SIDEBAR
+# 2. TOP RIGHT HEADER & USER BADGE
 # ==========================================
-#current_user = st.session_state.logged_in_user
-#user_role = USERS[current_user]["role"]
-#st.sidebar.success(f"User: **{current_user.upper()}** ({user_role})")
+current_user = st.session_state.logged_in_user
+user_role = USERS[current_user]["role"]
 
-#if st.sidebar.button("Logout"):
-  #  st.session_state.logged_in_user = None
- #   st.rerun()
+header_col1, header_col2 = st.columns([3, 1])
+
+with header_col1:
+    st.title("💊 Jeeva Medical Store Management System")
+
+with header_col2:
+    st.markdown(
+        f"""
+        <div style="text-align: right; padding-top: 10px;">
+            <span style="background-color: #e2efda; color: #375623; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: bold;">
+                👤 {current_user.upper()} ({user_role})
+            </span>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    if st.button("🚪 Logout", key="top_logout_btn", use_container_width=True):
+        st.session_state.logged_in_user = None
+        st.rerun()
+
+st.divider()
 
 # ==========================================
 # 3. MAIN TABS
 # ==========================================
-st.title("💊 Jeeva Medical Store Management System")
-
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 1. Purchase Parties Setup", 
     "💰 2. Daily Finance Initial",
@@ -66,10 +89,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # ------------------------------------------
-# TAB 1: PURCHASE PARTIES SETUP & ADMIN CORRECTIONS
+# TAB 1: PURCHASE PARTIES SETUP & BULK UPLOAD
 # ------------------------------------------
 with tab1:
     st.subheader("Distributor / Purchase Parties Master Setup")
+    st.markdown("Register individual medical suppliers or upload your master list in bulk via Excel/CSV.")
+
     with st.form("party_form"):
         c1, c2, c3 = st.columns(3)
         p_name = c1.text_input("Party / Distributor Name *")
@@ -94,6 +119,25 @@ with tab1:
             st.success(f"Successfully saved party: **{p_name.strip().title()}**!")
             st.rerun()
 
+    # Bulk Party Uploader
+    with st.expander("📤 Bulk Upload Parties & Opening Balances via Excel / CSV"):
+        st.markdown("Your file must include a `party_name` column. Optional columns: `phone`, `gstin`, `credit_period_days`, `opening_balance`, `as_on_date`.")
+        uploaded_party_file = st.file_uploader("Upload Party File", type=["xlsx", "xls", "csv"], key="party_uploader")
+        
+        if uploaded_party_file:
+            try:
+                df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file)
+                st.dataframe(df_party_upload.head(), use_container_width=True)
+                if st.button("🚀 Process & Import Parties in Bulk"):
+                    if 'party_name' in df_party_upload.columns:
+                        count = bulk_save_parties(df_party_upload)
+                        st.success(f"Successfully imported {count} parties!")
+                        st.rerun()
+                    else:
+                        st.error("Missing required column: `party_name`")
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+
     st.divider()
     st.write("### Registered Purchase Parties")
     df_parties = get_parties_df()
@@ -102,6 +146,7 @@ with tab1:
     else:
         st.info("No parties registered yet.")
 
+    # Admin Correction Section
     if user_role == "Owner":
         st.divider()
         st.subheader("🛠️ Admin Outstanding Balance Correction (Audit Logged)")
@@ -115,16 +160,11 @@ with tab1:
                 if st.form_submit_button("🔒 Apply Balance Correction"):
                     if corr_reason.strip():
                         party_row = df_parties[df_parties["party_name"] == corr_party].iloc[0]
-                        record_balance_correction(
-                            party_id=int(party_row["party_id"]),
-                            new_opening_balance=corr_amount,
-                            reason=corr_reason.strip(),
-                            admin_user=current_user
-                        )
+                        record_balance_correction(int(party_row["party_id"]), corr_amount, corr_reason.strip(), current_user)
                         st.success(f"Successfully corrected opening balance for {corr_party}!")
                         st.rerun()
                     else:
-                        st.error("Please provide a mandatory reason for the correction audit trail.")
+                        st.error("Please provide a mandatory reason.")
 
             st.write("### 📜 Admin Balance Correction Audit Trail")
             df_logs = get_adjustment_logs()
@@ -185,6 +225,26 @@ with tab3:
                 )
                 st.success(f"Invoice {inv_no} saved successfully for {selected_party}!")
                 st.rerun()
+
+        # Bulk Invoice Uploader
+        with st.expander("📤 Bulk Upload Purchase Bills via Excel / CSV"):
+            st.markdown("Required columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
+            uploaded_inv_file = st.file_uploader("Upload Invoice File", type=["xlsx", "xls", "csv"], key="inv_uploader")
+            
+            if uploaded_inv_file:
+                try:
+                    df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file)
+                    st.dataframe(df_inv_upload.head(), use_container_width=True)
+                    if st.button("🚀 Process & Import Bills in Bulk"):
+                        req_cols = ['party_name', 'invoice_number', 'invoice_date', 'bill_amount']
+                        if all(col in df_inv_upload.columns for col in req_cols):
+                            count = bulk_save_purchase_invoices(df_inv_upload)
+                            st.success(f"Successfully imported {count} purchase invoices!")
+                            st.rerun()
+                        else:
+                            st.error(f"Missing required columns. File must contain: {req_cols}")
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
 
         st.divider()
         st.write("### Active Purchase Bills & Due Date Status")
@@ -285,11 +345,11 @@ with tab4:
         st.info("No parties or purchase dues found yet. Add parties in Tab 1.")
 
 # ------------------------------------------
-# TAB 5: RECORD PAYMENT & CLEAR BILLS (NEW)
+# TAB 5: RECORD PAYMENT & CLEAR BILLS
 # ------------------------------------------
 with tab5:
     st.subheader("💸 Record Distributor Payment & Clear Bills")
-    st.markdown("Pay a distributor via Cash, UPI, or Bank Transfer, and select which unpaid bills are being cleared to update outstanding balances.")
+    st.markdown("Pay a distributor via Cash, UPI, or Bank Transfer, and select which unpaid bills are being cleared.")
 
     df_parties = get_parties_df()
     if df_parties.empty:
@@ -299,7 +359,6 @@ with tab5:
         party_row = df_parties[df_parties["party_name"] == pay_party].iloc[0]
         party_id = int(party_row["party_id"])
 
-        # Fetch unpaid bills for this party
         df_invoices = get_purchase_invoices_df()
         unpaid_party_bills = pd.DataFrame()
         if not df_invoices.empty:
@@ -308,15 +367,12 @@ with tab5:
         selected_invoice_ids = []
         if not unpaid_party_bills.empty:
             st.write("### Select Unpaid Bills to Clear")
-            st.caption("Check the bills that are being paid off with this payment.")
-            
-            # Display checkboxes for each unpaid bill
             for _, bill in unpaid_party_bills.iterrows():
                 checked = st.checkbox(f"Invoice No: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", key=f"inv_chk_{bill['invoice_id']}")
                 if checked:
                     selected_invoice_ids.append(int(bill['invoice_id']))
         else:
-            st.info(f"No specific unpaid purchase invoices found for {pay_party}. (Payment will apply towards general balance / opening balance).")
+            st.info(f"No specific unpaid purchase invoices found for {pay_party}.")
 
         st.divider()
         with st.form("payment_form"):
@@ -325,8 +381,7 @@ with tab5:
             pay_mode = pc2.selectbox("Payment Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
             pay_notes = st.text_input("Payment Notes / Transaction Ref No (Optional)")
 
-            submitted_payment = st.form_submit_button("✅ Confirm & Record Payment")
-            if submitted_payment:
+            if st.form_submit_button("✅ Confirm & Record Payment"):
                 if pay_amount > 0:
                     record_distributor_payment(
                         party_id=party_id,
@@ -348,90 +403,3 @@ with tab5:
             st.dataframe(df_payments, use_container_width=True, hide_index=True)
         else:
             st.info("No distributor payments recorded yet.")
-# Add this code block as a new tab or section in app_v2.py
-
-with st.expander("📤 Bulk Upload Purchase Bills via Excel / CSV"):
-    st.markdown("Upload your billing software export file. Ensure your columns match: `party_name`, `invoice_number`, `invoice_date`, and `bill_amount`.")
-    
-    uploaded_excel = st.file_uploader("Upload Excel/CSV File", type=["xlsx", "xls", "csv"])
-    
-    if uploaded_excel:
-        try:
-            if uploaded_excel.name.endswith('.csv'):
-                df_upload = pd.read_csv(uploaded_excel)
-            else:
-                df_upload = pd.read_excel(uploaded_excel)
-                
-            st.write("### Preview Uploaded Data:")
-            st.dataframe(df_upload.head(), use_container_width=True)
-            
-            if st.button("🚀 Process & Import Bills in Bulk"):
-                # Basic validation of columns
-                required_cols = ['party_name', 'invoice_number', 'invoice_date', 'bill_amount']
-                if all(col in df_upload.columns for col in required_cols):
-                    count = bulk_save_purchase_invoices(df_upload)
-                    st.success(f"Successfully imported {count} purchase invoices into the system!")
-                    st.rerun()
-                else:
-                    st.error(f"Missing required columns in your file. Your file must contain: {required_cols}")
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-# --- Add inside Tab 1 of app_v2.py ---
-
-    st.divider()
-    with st.expander("📤 Bulk Upload Parties & Opening Balances via Excel / CSV"):
-        st.markdown("""
-        Upload an Excel or CSV file containing your distributor master list. Your file must include a column named `party_name`. Optional columns include: 
-        `phone`, `gstin`, `credit_period_days`, `opening_balance`, and `as_on_date` (YYYY-MM-DD).
-        """)
-        
-        uploaded_party_file = st.file_uploader("Upload Party Excel/CSV File", type=["xlsx", "xls", "csv"], key="party_uploader")
-        
-        if uploaded_party_file:
-            try:
-                if uploaded_party_file.name.endswith('.csv'):
-                    df_party_upload = pd.read_csv(uploaded_party_file)
-                else:
-                    df_party_upload = pd.read_excel(uploaded_party_file)
-                    
-                st.write("### Preview Uploaded Parties:")
-                st.dataframe(df_party_upload.head(), use_container_width=True)
-                
-                if st.button("🚀 Process & Import Parties in Bulk"):
-                    if 'party_name' in df_party_upload.columns:
-                        count = bulk_save_parties(df_party_upload)
-                        st.success(f"Successfully imported/updated {count} parties with their opening balances!")
-                        st.rerun()
-                    else:
-                        st.error("Missing required column: Your file must contain a `party_name` column.")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
-# ==========================================
-# 2. TOP RIGHT HEADER & USER STATUS (REPLACES SIDEBAR LOGIN INFO)
-# ==========================================
-current_user = st.session_state.logged_in_user
-user_role = USERS[current_user]["role"]
-
-# Top header layout: Title on left, User Badge & Logout on right
-header_col1, header_col2 = st.columns([3, 1])
-
-with header_col1:
-    st.title("💊 Jeeva Medical Store Management System")
-
-with header_col2:
-    # Small right-aligned user badge & logout button
-    st.markdown(
-        f"""
-        <div style="text-align: right; padding-top: 10px;">
-            <span style="background-color: #e2efda; color: #375623; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: bold;">
-                👤 {current_user.upper()} ({user_role})
-            </span>
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
-    if st.button("🚪 Logout", key="top_logout_btn", use_container_width=True):
-        st.session_state.logged_in_user = None
-        st.rerun()
-
-st.divider()
