@@ -44,13 +44,13 @@ if not st.session_state.logged_in_user:
 # ==========================================
 # 2. SIDEBAR
 # ==========================================
-current_user = st.session_state.logged_in_user
-user_role = USERS[current_user]["role"]
-st.sidebar.success(f"User: **{current_user.upper()}** ({user_role})")
+#current_user = st.session_state.logged_in_user
+#user_role = USERS[current_user]["role"]
+#st.sidebar.success(f"User: **{current_user.upper()}** ({user_role})")
 
-if st.sidebar.button("Logout"):
-    st.session_state.logged_in_user = None
-    st.rerun()
+#if st.sidebar.button("Logout"):
+  #  st.session_state.logged_in_user = None
+ #   st.rerun()
 
 # ==========================================
 # 3. MAIN TABS
@@ -406,3 +406,32 @@ with st.expander("📤 Bulk Upload Purchase Bills via Excel / CSV"):
                         st.error("Missing required column: Your file must contain a `party_name` column.")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
+# ==========================================
+# 2. TOP RIGHT HEADER & USER STATUS (REPLACES SIDEBAR LOGIN INFO)
+# ==========================================
+current_user = st.session_state.logged_in_user
+user_role = USERS[current_user]["role"]
+
+# Top header layout: Title on left, User Badge & Logout on right
+header_col1, header_col2 = st.columns([3, 1])
+
+with header_col1:
+    st.title("💊 Jeeva Medical Store Management System")
+
+with header_col2:
+    # Small right-aligned user badge & logout button
+    st.markdown(
+        f"""
+        <div style="text-align: right; padding-top: 10px;">
+            <span style="background-color: #e2efda; color: #375623; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: bold;">
+                👤 {current_user.upper()} ({user_role})
+            </span>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    if st.button("🚪 Logout", key="top_logout_btn", use_container_width=True):
+        st.session_state.logged_in_user = None
+        st.rerun()
+
+st.divider()
