@@ -8,9 +8,10 @@ from database_v2 import (
     init_clean_database, get_parties_df, save_party, update_party, delete_party,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
     record_distributor_payment, get_distributor_payments_df,
-    bulk_save_parties, bulk_save_purchase_invoices,  # <--- Make sure this is included here!
+    bulk_save_parties, bulk_save_purchase_invoices,
     extract_invoice_from_image, extract_payment_from_image
 )
+
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
 init_clean_database()
 
@@ -107,10 +108,7 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
     else:
         st.info("No parties or purchase dues found yet.")
 
-# --- SECTION 2: AI SCAN NEW BILL & AI SCAN BILL PAID ---
-# ==========================================
-# SECTION 2: ADD NEW BILLS (AI Scan, Excel, Manual) & AI PAYMENT SCANNER
-# ==========================================
+# --- SECTION 2: ADD NEW BILLS (AI Scan, Excel, Manual) & AI PAYMENT SCANNER ---
 col_op1, col_op2 = st.columns(2)
 
 with col_op1:
@@ -194,7 +192,7 @@ with col_op1:
                         st.success(f"Successfully saved bill **{m_inv_no}** for {m_party}!")
                         st.rerun()
             else:
-                st.warning("Please register at least one purchase party first.")
+                        st.warning("Please register at least one purchase party first.")
 
 with col_op2:
     with st.container(border=True):
@@ -234,6 +232,7 @@ with col_op2:
                                 st.warning("Invalid payment amount.")
                         else:
                             st.error(f"Party '{extracted.get('party_name')}' not found.")
+
 # --- SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT ---
 with st.container(border=True):
     st.subheader("📋 Purchase Parties Master Setup & Management")
