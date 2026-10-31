@@ -5,7 +5,7 @@ import pandas as pd
 import io
 
 from database_v2 import (
-    init_clean_database, get_parties_df, save_party,
+    init_clean_database, get_parties_df, save_party, update_party, delete_party,
     get_financial_openings_df, save_financial_opening,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
     record_balance_correction, get_adjustment_logs,
@@ -136,7 +136,9 @@ with col_op1:
                 if st.button("🚀 Process & Import Bills"):
                     count, errors = bulk_save_purchase_invoices(df_inv_upload)
                     if count > 0: st.success(f"Imported {count} bills successfully!")
-                    if errors: st.warning(f"Encountered {len(errors)} issues.")
+                    if errors:
+                        st.error(f"Encountered {len(errors)} issues:")
+                        for err in errors[:5]: st.warning(err)
                     if count > 0: st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -158,7 +160,6 @@ with col_op2:
                         st.success("Extracted Data Successfully!")
                         st.json(extracted)
                         
-                        # Match party and record payment automatically
                         df_parties = get_parties_df()
                         matched_party = df_parties[df_parties["party_name"].str.contains(extracted.get("party_name", ""), case=False, na=False)]
                         
@@ -175,13 +176,108 @@ with col_op2:
                                     recorded_by=current_user
                                 )
                                 st.success(f"Recorded payment of ₹{amt:,.2f} for {matched_party.iloc[0]['party_name']}!")
+                                st.rerun()
                             else:
                                 st.warning("Extracted amount was 0 or invalid.")
                         else:
                             st.error(f"Party '{extracted.get('party_name')}' not found in Master List. Please register them first.")
 
 
-# --- SECTION 3: EXPORT DATA TO EXCEL ---
+# --- SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT ---
+with st.container(border=True):
+    st.subheader("📋 Purchase Parties Master Setup & Management")
+    
+    add_tab, bulk_party_tab, edit_del_tab = st.tabs(["➕ Add Single Party", "📤 Bulk Upload Parties", "🛠️ Edit / Delete Party"])
+    
+    with add_tab:
+        with st.form("party_form"):
+            c1, c2, c3 = st.columns(3)
+            p_name = c1.text_input("Party / Distributor Name *")
+            p_phone = c2.text_input("Phone Number")
+            p_gstin = c3.text_input("GSTIN Number")
+
+            c4, c5, c6 = st.columns(3)
+            p_credit = c4.number_input("Credit Period (Days)", min_value=0, value=15)
+            p_opening = c5.number_input("Opening Balance (₹)", min_value=0.0, step=100.0)
+            p_as_on_date = c6.date_input("Opening Balance As on Date", value=date.today())
+
+            if st.form_submit_button("💾 Save Party") and p_name:
+                save_party(
+                    name=p_name.strip().title(),
+                    phone=p_phone.strip(),
+                    gstin=p_gstin.strip().upper(),
+                    credit_days=p_credit,
+                    opening_bal=p_opening,
+                    as_on_date=p_as_on_date.strftime("%Y-%m-%d"),
+                    created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                )
+                st.success(f"Successfully saved party: **{p_name.strip().title()}**!")
+                st.rerun()
+
+    with bulk_party_tab:
+        uploaded_party_file = st.file_uploader("Upload Party Excel/CSV", type=["xlsx", "xls", "csv"], key="party_uploader")
+        if uploaded_party_file:
+            try:
+                df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file)
+                st.dataframe(df_party_upload.head(), use_container_width=True)
+                if st.button("🚀 Process & Import Parties"):
+                    count, errors = bulk_save_parties(df_party_upload)
+                    if count > 0: st.success(f"Successfully imported {count} parties!")
+                    if errors:
+                        st.error(f"Encountered {len(errors)} issues:")
+                        for err in errors[:5]: st.warning(err)
+                    if count > 0: st.rerun()
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+
+    with edit_del_tab:
+        df_parties_mgmt = get_parties_df()
+        if not df_parties_mgmt.empty:
+            selected_party_name = st.selectbox("Select Party to Edit or Delete", df_parties_mgmt["party_name"].tolist(), key="mgmt_party_sel")
+            party_record = df_parties_mgmt[df_parties_mgmt["party_name"] == selected_party_name].iloc[0]
+            party_id = int(party_record["party_id"])
+            
+            sub_edit_tab, sub_del_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
+            
+            with sub_edit_tab:
+                with st.form("edit_party_form"):
+                    e_name = st.text_input("Party Name", value=party_record["party_name"])
+                    e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
+                    e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
+                    e_credit = st.number_input("Credit Period (Days)", min_value=0, value=int(party_record.get("credit_period_days", 15)))
+                    e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=float(party_record.get("opening_balance", 0.0)), step=100.0)
+                    
+                    if st.form_submit_button("💾 Save Changes"):
+                        if e_name.strip():
+                            update_party(
+                                party_id=party_id,
+                                name=e_name.strip().title(),
+                                phone=e_phone.strip(),
+                                gstin=e_gstin.strip().upper(),
+                                credit_days=e_credit,
+                                opening_bal=e_opening,
+                                as_on_date=str(party_record.get("as_on_date", date.today().strftime("%Y-%m-%d")))
+                            )
+                            st.success(f"Successfully updated details for **{e_name.strip().title()}**!")
+                            st.rerun()
+                        else:
+                            st.error("Party name cannot be empty.")
+                        
+            with sub_del_tab:
+                st.warning(f"⚠️ Deleting **{selected_party_name}** will also remove all associated purchase invoices and payment records permanently.")
+                confirm_del = st.checkbox(f"I confirm I want to delete {selected_party_name}", key="confirm_delete_chk")
+                if st.button("🗑️ Permanently Delete Party", type="primary", key="btn_del_party"):
+                    if confirm_del:
+                        delete_party(party_id)
+                        st.success(f"Successfully deleted {selected_party_name}.")
+                        st.rerun()
+                    else:
+                        st.error("Please check the confirmation box to enable deletion.")
+        else:
+            st.info("No parties registered in the system yet.")
+
+
+# --- SECTION 4: EXPORT DATA TO EXCEL ---
 with st.container(border=True):
     st.subheader("💾 Download System Data as Excel")
     col_dl1, col_dl2, col_dl3 = st.columns(3)
@@ -209,50 +305,3 @@ with st.container(border=True):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_pay.to_excel(writer, index=False, sheet_name='Payments')
             st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-# --- Replace party management section in app_v2.py ---
-
-with st.expander("🛠️ Manage Existing Purchase Parties (Edit / Delete)"):
-    df_parties_mgmt = get_parties_df()
-    if not df_parties_mgmt.empty:
-        selected_party_name = st.selectbox("Select Party to Edit or Delete", df_parties_mgmt["party_name"].tolist(), key="mgmt_party_sel")
-        party_record = df_parties_mgmt[df_parties_mgmt["party_name"] == selected_party_name].iloc[0]
-        party_id = int(party_record["party_id"])
-        
-        edit_tab, delete_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
-        
-        with edit_tab:
-            with st.form("edit_party_form"):
-                e_name = st.text_input("Party Name", value=party_record["party_name"])
-                e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
-                e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
-                e_credit = st.number_input("Credit Period (Days)", min_value=0, value=int(party_record.get("credit_period_days", 15)))
-                e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=float(party_record.get("opening_balance", 0.0)), step=100.0)
-                
-                if st.form_submit_button("💾 Save Changes"):
-                    if e_name.strip():
-                        update_party(
-                            party_id=party_id,
-                            name=e_name.strip().title(),
-                            phone=e_phone.strip(),
-                            gstin=e_gstin.strip().upper(),
-                            credit_days=e_credit,
-                            opening_bal=e_opening,
-                            as_on_date=str(party_record.get("as_on_date", date.today().strftime("%Y-%m-%d")))
-                        )
-                        st.success(f"Successfully updated details for **{e_name.strip().title()}**!")
-                        st.rerun()
-                    else:
-                        st.error("Party name cannot be empty.")
-                    
-        with delete_tab:
-            st.warning(f"⚠️ Deleting **{selected_party_name}** will also remove all associated purchase invoices and payment records permanently.")
-            confirm_del = st.checkbox(f"I confirm I want to delete {selected_party_name}", key="confirm_delete_chk")
-            if st.button("🗑️ Permanently Delete Party", type="primary", key="btn_del_party"):
-                if confirm_del:
-                    delete_party(party_id)
-                    st.success(f"Successfully deleted {selected_party_name}.")
-                    st.rerun()
-                else:
-                    st.error("Please check the confirmation box to enable deletion.")
-    else:
-        st.info("No parties registered in the system yet.")
