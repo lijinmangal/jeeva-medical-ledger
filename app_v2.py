@@ -180,12 +180,19 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                     st.error(f"Party '{p_name_raw}' not found in Master List.")
 
             with bill_tab_excel:
-                st.markdown("Upload Excel/CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
-                uploaded_inv_file = st.file_uploader("Upload Purchase Bills Excel/CSV", type=["xlsx", "xls", "csv"], key="dash_inv_up")
+                st.markdown("Upload Excel (`.xlsx`, `.xls`) or CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
+                uploaded_inv_file = st.file_uploader("Upload Purchase Bills File", type=["xlsx", "xls", "csv"], key="dash_inv_up")
                 
                 if uploaded_inv_file:
                     try:
-                        df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file, engine='openpyxl')
+                        file_name = uploaded_inv_file.name.lower()
+                        if file_name.endswith('.csv'):
+                            df_inv_upload = pd.read_csv(uploaded_inv_file)
+                        elif file_name.endswith('.xls'):
+                            df_inv_upload = pd.read_excel(uploaded_inv_file, engine='xlrd')
+                        else:
+                            df_inv_upload = pd.read_excel(uploaded_inv_file, engine='openpyxl')
+                            
                         df_inv_upload.columns = [str(c).strip().lower().replace(" ", "_") for c in df_inv_upload.columns]
                         
                         # Fetch registered parties for validation
@@ -210,7 +217,6 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                 
                         df_inv_upload["Validation_Status"] = df_inv_upload.apply(validate_row, axis=1)
                         
-                        # Styling function to highlight errors in red
                         def style_status(val):
                             if "✅" in str(val):
                                 return "background-color: #e2efda; color: #375623; font-weight: bold;"
@@ -223,9 +229,9 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                         invalid_count = (df_inv_upload["Validation_Status"] != "✅ Valid").sum()
                         
                         if invalid_count > 0:
-                            st.error(f"⚠️ Found **{invalid_count}** problematic rows highlighted in red above. Please correct your Excel file and re-upload, or register the missing parties in the **Party Master** tab first.")
+                            st.error(f"⚠️ Found **{invalid_count}** problematic rows highlighted in red above. Please correct your file and re-upload, or register missing parties in the **Party Master** tab first.")
                         else:
-                            st.success("✨ All 112+ entries and party names match your Master List perfectly! Ready for import.")
+                            st.success("✨ All entries and party names match your Master List perfectly! Ready for import.")
                             if st.button("🚀 Step 2: Confirm & Import Verified Bills", type="primary", key="btn_confirm_import"):
                                 count, errors = bulk_save_purchase_invoices(df_inv_upload)
                                 if count > 0:
@@ -235,7 +241,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                     for err in errors:
                                         st.warning(err)
                     except Exception as e:
-                        st.error(f"Error reading file: {e}")
+                        st.error(f"Error reading file: {e}. (Note: If using an old .xls file, ensure `xlrd` is installed in your environment).")
 
             with bill_tab_manual:
                 st.markdown("Manually enter purchase bill details.")
