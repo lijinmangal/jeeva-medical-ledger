@@ -383,6 +383,8 @@ def delete_party(party_id):
     conn.close()
 # --- Add to database_v2.py ---
 
+# --- Add to database_v2.py ---
+
 def update_party(party_id, name, phone, gstin, credit_days, opening_bal, as_on_date):
     """Updates an existing party by its unique party_id."""
     conn = sqlite3.connect(DB_FILE)
