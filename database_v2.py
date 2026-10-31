@@ -2,7 +2,50 @@
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+# --- Add to database_v2.py ---
+import os
+from google import genai
+from google.genai import types
+from PIL import Image
 
+def extract_payment_from_image(image_file):
+    """Uses Gemini Vision AI to extract party name, amount paid, and notes from an uploaded payment slip or daily finance image."""
+    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"error": "Gemini API key not found. Please set GEMINI_API_KEY in environment or Streamlit secrets."}
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        image = Image.open(image_file)
+        
+        prompt = """
+        Analyze this daily finance sheet, payment receipt, or distributor payment slip. 
+        Extract the following details in valid JSON format:
+        {
+            "party_name": "Name of the distributor or party paid",
+            "amount_paid": 0.0,
+            "payment_mode": "CASH / UPI / BANK_TRANSFER / CHEQUE",
+            "notes": "Any reference number, bill number, or notes mentioned"
+        }
+        Return ONLY valid JSON without any markdown formatting or extra text.
+        """
+        
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[image, prompt]
+        )
+        
+        import json
+        text_resp = response.text.strip()
+        # Clean markdown if present
+        if text_resp.startswith("```json"):
+            text_resp = text_resp[7:-3].strip()
+        elif text_resp.startswith("```"):
+            text_resp = text_resp[3:-3].strip()
+            
+        return json.loads(text_resp)
+    except Exception as e:
+        return {"error": str(e)}
 DB_FILE = "medical_store_v2.db"
 
 def init_clean_database():
