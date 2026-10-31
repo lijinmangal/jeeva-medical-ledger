@@ -8,10 +8,9 @@ from database_v2 import (
     init_clean_database, get_parties_df, save_party, update_party, delete_party,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
     record_distributor_payment, get_distributor_payments_df,
-    bulk_save_parties,
+    bulk_save_parties, bulk_save_purchase_invoices,  # <--- Make sure this is included here!
     extract_invoice_from_image, extract_payment_from_image
 )
-
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
 init_clean_database()
 
