@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import os
 import streamlit as st
 
-# Safe AI Imports (prevents app crashes if package is missing)
+# Safe AI Imports
 try:
     from google import genai
     from PIL import Image
@@ -102,6 +102,28 @@ def safe_float(val, default=0.0):
     except Exception:
         return default
 
+def parse_date(val):
+    """Safely parses dates from various spreadsheet formats into YYYY-MM-DD."""
+    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
+        return datetime.now().strftime("%Y-%m-%d")
+    
+    if isinstance(val, (datetime, pd.Timestamp)):
+        return val.strftime("%Y-%m-%d")
+        
+    val_str = str(val).strip()
+    if len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
+        return val_str[:10]
+        
+    formats = ["%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d-%b-%y"]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(val_str, fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return datetime.now().strftime("%Y-%m-%d")
+
+# --- PARTY HELPERS ---
 def get_parties_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM parties ORDER BY party_name ASC", conn)
@@ -143,32 +165,7 @@ def delete_party(party_id):
     cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
     conn.commit()
     conn.close()
-def parse_date(val):
-    """Safely parses dates from various spreadsheet formats into YYYY-MM-DD."""
-    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
-        return datetime.now().strftime("%Y-%m-%d")
-    
-    if isinstance(val, (datetime, pd.Timestamp)):
-        return val.strftime("%Y-%m-%d")
-        
-    val_str = str(val).strip()
-    
-    # If it's already YYYY-MM-DD with time
-    if len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
-        return val_str[:10]
-        
-    # Try multiple common date formats
-    formats = ["%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d-%b-%y"]
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(val_str, fmt)
-            return dt.strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-            
-    # Fallback to today if format is unrecognized
-    return datetime.now().strftime("%Y-%m-%d")
-    
+
 def bulk_save_parties(df_parties):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -188,8 +185,7 @@ def bulk_save_parties(df_parties):
             
             credit_days = safe_int(row.get('credit_period_days'), 15)
             opening_bal = safe_float(row.get('opening_balance'), 0.0)
-            as_on_date = str(row.get('as_on_date', datetime.now().strftime("%Y-%m-%d"))).strip()[:10]
-            if as_on_date == "nan" or not as_on_date: as_on_date = datetime.now().strftime("%Y-%m-%d")
+            as_on_date = parse_date(row.get('as_on_date'))
             
             cursor.execute("""
                 INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
@@ -208,6 +204,7 @@ def bulk_save_parties(df_parties):
     conn.close()
     return success_count, errors
 
+# --- INVOICE HELPERS ---
 def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
     inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
     due_dt = inv_dt + timedelta(days=credit_days)
@@ -233,7 +230,7 @@ def bulk_save_purchase_invoices(df_invoices):
         try:
             party_name = str(row.get('party_name', '')).strip().title()
             inv_no = str(row.get('invoice_number', '')).strip()
-            inv_date = parse_date(row.get('invoice_date'))  # <--- Uses flexible date parser!
+            inv_date = parse_date(row.get('invoice_date'))
             amount = safe_float(row.get('bill_amount'), 0.0)
             
             if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
@@ -273,6 +270,41 @@ def get_purchase_invoices_df() -> pd.DataFrame:
     conn.close()
     return df
 
+# --- PAYMENTS & DUES SUMMARY ---
+def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, notes, recorded_by, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (party_id, payment_amount, payment_mode, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    
+    if invoice_ids_to_clear:
+        placeholders = ','.join(['?'] * len(invoice_ids_to_clear))
+        cursor.execute(f"UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id IN ({placeholders})", invoice_ids_to_clear)
+    conn.commit()
+    conn.close()
+
+def delete_distributor_payment(payment_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
+    conn.commit()
+    conn.close()
+
+def get_distributor_payments_df() -> pd.DataFrame:
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        df = pd.read_sql_query("""
+            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
+            FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
+            ORDER BY dp.payment_id DESC
+        """, conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
+
 def get_party_dues_summary() -> pd.DataFrame:
     parties_df = get_parties_df()
     if parties_df.empty: return pd.DataFrame()
@@ -285,7 +317,6 @@ def get_party_dues_summary() -> pd.DataFrame:
         p_id, p_name = party["party_id"], party["party_name"]
         opening_bal, as_on = party["opening_balance"], party["as_on_date"]
         
-        # 1. Total purchase bills for this party
         total_bills = 0.0
         earliest_due = None
         if not invoices_df.empty:
@@ -296,14 +327,12 @@ def get_party_dues_summary() -> pd.DataFrame:
                 if not unpaid_party_invs.empty:
                     earliest_due = unpaid_party_invs["due_date"].min()
 
-        # 2. Total payments made to this party
         total_payments = 0.0
         if not payments_df.empty and "party_id" in payments_df.columns:
             party_pays = payments_df[payments_df["party_id"] == p_id]
             if not party_pays.empty:
                 total_payments = party_pays["amount_paid"].sum()
 
-        # 3. Net Ledger Balance Due = Opening + Bills - Payments
         total_due = opening_bal + total_bills - total_payments
         
         urgency = "🟢 Safe"
@@ -330,33 +359,7 @@ def get_party_dues_summary() -> pd.DataFrame:
         })
     return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
 
-def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, notes, recorded_by, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (party_id, payment_amount, payment_mode, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    
-    if invoice_ids_to_clear:
-        placeholders = ','.join(['?'] * len(invoice_ids_to_clear))
-        cursor.execute(f"UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id IN ({placeholders})", invoice_ids_to_clear)
-    conn.commit()
-    conn.close()
-
-def get_distributor_payments_df() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
-    try:
-        df = pd.read_sql_query("""
-            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
-            FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
-            ORDER BY dp.payment_id DESC
-        """, conn)
-    except Exception:
-        df = pd.DataFrame()
-    conn.close()
-    return df
-
+# --- GEMINI AI VISION SCANNERS ---
 def extract_invoice_from_image(image_file):
     if not AI_AVAILABLE:
         return {"error": "google-genai package not installed."}
@@ -414,12 +417,3 @@ def extract_payment_from_image(image_file):
         return json.loads(text_resp)
     except Exception as e:
         return {"error": str(e)}
-# --- Add to database_v2.py ---
-
-def delete_distributor_payment(payment_id):
-    """Deletes a payment record by its unique payment_id and updates outstanding calculations."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
-    conn.commit()
-    conn.close()
