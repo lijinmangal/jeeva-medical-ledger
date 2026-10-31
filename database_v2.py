@@ -370,3 +370,14 @@ def extract_payment_from_image(image_file):
         return json.loads(text_resp)
     except Exception as e:
         return {"error": str(e)}
+# --- Add to database_v2.py ---
+
+def delete_party(party_id):
+    """Deletes a party and all associated purchase invoices and payment records."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM purchase_invoices WHERE party_id = ?", (party_id,))
+    cursor.execute("DELETE FROM distributor_payments WHERE party_id = ?", (party_id,))
+    cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
+    conn.commit()
+    conn.close()
