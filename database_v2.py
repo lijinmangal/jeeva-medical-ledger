@@ -414,3 +414,12 @@ def extract_payment_from_image(image_file):
         return json.loads(text_resp)
     except Exception as e:
         return {"error": str(e)}
+# --- Add to database_v2.py ---
+
+def delete_distributor_payment(payment_id):
+    """Deletes a payment record by its unique payment_id and updates outstanding calculations."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
+    conn.commit()
+    conn.close()
