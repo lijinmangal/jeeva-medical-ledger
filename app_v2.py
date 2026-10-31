@@ -109,51 +109,93 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
         st.info("No parties or purchase dues found yet.")
 
 # --- SECTION 2: AI SCAN NEW BILL & AI SCAN BILL PAID ---
+# ==========================================
+# SECTION 2: ADD NEW BILLS (AI Scan, Excel, Manual) & AI PAYMENT SCANNER
+# ==========================================
 col_op1, col_op2 = st.columns(2)
 
 with col_op1:
     with st.container(border=True):
-        st.subheader("📥 AI Scan New Purchase Bill (Image)")
-        st.markdown("Upload photo of distributor purchase bill/invoice to extract and save.")
-        uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key="ai_bill_up")
+        st.subheader("📥 Add New Purchase Bills")
+        bill_tab_ai, bill_tab_excel, bill_tab_manual = st.tabs(["🤖 AI Image Scan", "📊 Bulk Excel", "✍️ Manual Entry"])
         
-        if uploaded_bill_img:
-            st.image(uploaded_bill_img, caption="Uploaded Purchase Bill", width=250)
-            if st.button("🔍 Extract & Save Purchase Bill via AI"):
-                with st.spinner("Gemini AI is scanning the invoice..."):
-                    extracted_bill = extract_invoice_from_image(uploaded_bill_img)
-                    if "error" in extracted_bill:
-                        st.error(f"AI Extraction Error: {extracted_bill['error']}")
-                    else:
-                        st.success("Extracted Bill Details Successfully!")
-                        st.json(extracted_bill)
-                        
-                        df_parties = get_parties_df()
-                        p_name_raw = str(extracted_bill.get("party_name", "")).strip()
-                        matched_party = df_parties[df_parties["party_name"].str.contains(p_name_raw, case=False, na=False)]
-                        
-                        if not matched_party.empty:
-                            p_id = int(matched_party.iloc[0]["party_id"])
-                            credit_days = int(matched_party.iloc[0]["credit_period_days"])
-                            inv_amt = float(extracted_bill.get("bill_amount", 0.0))
-                            inv_no = str(extracted_bill.get("invoice_number", "INV-AI"))
-                            inv_date = str(extracted_bill.get("invoice_date", date.today().strftime("%Y-%m-%d")))
-                            
-                            if inv_amt > 0:
-                                save_purchase_invoice(
-                                    party_id=p_id,
-                                    inv_no=inv_no,
-                                    inv_date=inv_date,
-                                    credit_days=credit_days,
-                                    amount=inv_amt,
-                                    created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                )
-                                st.success(f"Saved Purchase Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
-                                st.rerun()
-                            else:
-                                st.warning("Extracted bill amount was 0 or invalid.")
+        with bill_tab_ai:
+            st.markdown("Upload photo of distributor purchase bill/invoice to extract & save.")
+            uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key="ai_bill_up")
+            
+            if uploaded_bill_img:
+                st.image(uploaded_bill_img, caption="Uploaded Purchase Bill", width=220)
+                if st.button("🔍 Extract & Save Bill via AI"):
+                    with st.spinner("Gemini AI is scanning invoice..."):
+                        extracted_bill = extract_invoice_from_image(uploaded_bill_img)
+                        if "error" in extracted_bill:
+                            st.error(f"AI Error: {extracted_bill['error']}")
                         else:
-                            st.error(f"Party '{p_name_raw}' not found in Master List. Please register them first.")
+                            st.success("Extracted Successfully!")
+                            st.json(extracted_bill)
+                            
+                            df_parties = get_parties_df()
+                            p_name_raw = str(extracted_bill.get("party_name", "")).strip()
+                            matched_party = df_parties[df_parties["party_name"].str.contains(p_name_raw, case=False, na=False)]
+                            
+                            if not matched_party.empty:
+                                p_id = int(matched_party.iloc[0]["party_id"])
+                                credit_days = int(matched_party.iloc[0]["credit_period_days"])
+                                inv_amt = float(extracted_bill.get("bill_amount", 0.0))
+                                inv_no = str(extracted_bill.get("invoice_number", "INV-AI"))
+                                inv_date = str(extracted_bill.get("invoice_date", date.today().strftime("%Y-%m-%d")))
+                                
+                                if inv_amt > 0:
+                                    save_purchase_invoice(p_id, inv_no, inv_date, credit_days, inv_amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                    st.success(f"Saved Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
+                                    st.rerun()
+                                else:
+                                    st.warning("Invalid bill amount.")
+                            else:
+                                st.error(f"Party '{p_name_raw}' not found in Master List.")
+
+        with bill_tab_excel:
+            st.markdown("Upload Excel/CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
+            uploaded_inv_file = st.file_uploader("Upload Purchase Bills Excel/CSV", type=["xlsx", "xls", "csv"], key="dash_inv_up")
+            
+            if uploaded_inv_file:
+                try:
+                    df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file)
+                    st.dataframe(df_inv_upload.head(3), use_container_width=True)
+                    if st.button("🚀 Process & Import Bills in Bulk"):
+                        count, errors = bulk_save_purchase_invoices(df_inv_upload)
+                        if count > 0: st.success(f"Imported {count} bills successfully!")
+                        if errors:
+                            st.error(f"Encountered {len(errors)} issues:")
+                            for err in errors[:5]: st.warning(err)
+                        if count > 0: st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+        with bill_tab_manual:
+            st.markdown("Manually enter purchase bill details.")
+            df_parties_manual = get_parties_df()
+            if not df_parties_manual.empty:
+                with st.form("manual_bill_form"):
+                    m_party = st.selectbox("Select Distributor *", df_parties_manual["party_name"].tolist(), key="manual_party_sel")
+                    m_inv_no = st.text_input("Invoice Number *", key="manual_inv_no")
+                    m_inv_date = st.date_input("Invoice Date", value=date.today(), key="manual_inv_date")
+                    m_amt = st.number_input("Bill Amount (₹) *", min_value=0.0, step=100.0, key="manual_amt")
+                    
+                    if st.form_submit_button("💾 Save Manual Bill") and m_inv_no and m_amt > 0:
+                        party_row = df_parties_manual[df_parties_manual["party_name"] == m_party].iloc[0]
+                        save_purchase_invoice(
+                            party_id=int(party_row["party_id"]),
+                            inv_no=m_inv_no.strip(),
+                            inv_date=m_inv_date.strftime("%Y-%m-%d"),
+                            credit_days=int(party_row["credit_period_days"]),
+                            amount=m_amt,
+                            created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                        st.success(f"Successfully saved bill **{m_inv_no}** for {m_party}!")
+                        st.rerun()
+            else:
+                st.warning("Please register at least one purchase party first.")
 
 with col_op2:
     with st.container(border=True):
@@ -162,14 +204,14 @@ with col_op2:
         uploaded_slip = st.file_uploader("Upload Payment Slip / Finance Image", type=["png", "jpg", "jpeg"], key="ai_slip_up")
         
         if uploaded_slip:
-            st.image(uploaded_slip, caption="Uploaded Finance Slip", width=250)
+            st.image(uploaded_slip, caption="Uploaded Finance Slip", width=220)
             if st.button("🔍 Extract & Record Payment via AI"):
-                with st.spinner("Gemini AI is analyzing the slip..."):
+                with st.spinner("Gemini AI is analyzing slip..."):
                     extracted = extract_payment_from_image(uploaded_slip)
                     if "error" in extracted:
-                        st.error(f"AI Extraction Error: {extracted['error']}")
+                        st.error(f"AI Error: {extracted['error']}")
                     else:
-                        st.success("Extracted Data Successfully!")
+                        st.success("Extracted Successfully!")
                         st.json(extracted)
                         
                         df_parties = get_parties_df()
@@ -190,10 +232,9 @@ with col_op2:
                                 st.success(f"Recorded payment of ₹{amt:,.2f} for {matched_party.iloc[0]['party_name']}!")
                                 st.rerun()
                             else:
-                                st.warning("Extracted amount was 0 or invalid.")
+                                st.warning("Invalid payment amount.")
                         else:
-                            st.error(f"Party '{extracted.get('party_name')}' not found in Master List. Please register them first.")
-
+                            st.error(f"Party '{extracted.get('party_name')}' not found.")
 # --- SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT ---
 with st.container(border=True):
     st.subheader("📋 Purchase Parties Master Setup & Management")
