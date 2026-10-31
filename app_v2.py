@@ -416,3 +416,31 @@ with st.container(border=True):
                 st.info("No distributor payments recorded yet.")
     else:
         st.warning("Please register at least one purchase party first.")
+# --- Replace payment history expander in app_v2.py ---
+
+        with st.expander("📜 View & Manage Payment History"):
+            df_payments = get_distributor_payments_df()
+            if not df_payments.empty:
+                st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "timestamp", "recorded_by", "notes"]], use_container_width=True, hide_index=True)
+                
+                st.markdown("---")
+                st.markdown("##### 🗑️ Delete Wrongly Recorded Payment")
+                
+                payment_options = df_payments.apply(
+                    lambda r: f"ID: {r['payment_id']} | Party: {r['party_name']} | ₹{r['amount_paid']:,.2f} | Date: {r['timestamp']}", 
+                    axis=1
+                ).tolist()
+                
+                selected_pay_to_del = st.selectbox("Select Payment Entry to Remove", payment_options, key="del_pay_sel")
+                
+                if st.button("🗑️ Delete Selected Payment", type="primary", key="btn_del_payment"):
+                    try:
+                        # Extract payment_id from the selection string
+                        p_id_extracted = int(selected_pay_to_del.split("|")[0].replace("ID:", "").strip())
+                        delete_distributor_payment(p_id_extracted)
+                        st.success(f"Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting payment: {e}")
+            else:
+                st.info("No distributor payments recorded yet.")
