@@ -291,58 +291,34 @@ def get_distributor_payments_df() -> pd.DataFrame:
     return df
 # Add to database_v2.py
 
-def bulk_save_purchase_invoices(df_invoices):
-    """Saves a dataframe of parsed purchase bills in bulk."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    success_count = 0
-    for _, row in df_invoices.iterrows():
-        try:
-            party_name = str(row['party_name']).strip().title()
-            inv_no = str(row['invoice_number']).strip()
-            inv_date = str(row['invoice_date']).strip()
-            amount = float(row['bill_amount'])
-            
-            # Find party_id
-            cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
-            party_row = cursor.fetchone()
-            
-            if party_row:
-                p_id, credit_days = party_row[0], party_row[1]
-                
-                # Compute due date
-                inv_dt = datetime.strptime(inv_date[:10], "%Y-%m-%d")
-                due_dt = inv_dt + timedelta(days=int(credit_days))
-                due_date_str = due_dt.strftime("%Y-%m-%d")
-                
-                cursor.execute("""
-                    INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
-                """, (p_id, inv_no, inv_date[:10], due_date_str, amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                success_count += 1
-        except Exception as e:
-            print(f"Skipping row due to error: {e}")
-            
-    conn.commit()
-    conn.close()
-    return success_count
-# --- Add to database_v2.py ---
-
 def bulk_save_parties(df_parties):
-    """Saves a dataframe of parties and opening balances in bulk."""
+    """Saves parties in bulk, auto-cleaning column headers and catching errors."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
+    # Clean column names (lowercase and strip spaces)
+    df_parties.columns = [str(c).strip().lower().replace(" ", "_") for c in df_parties.columns]
+    
     success_count = 0
-    for _, row in df_parties.iterrows():
+    errors = []
+    
+    for idx, row in df_parties.iterrows():
         try:
-            name = str(row['party_name']).strip().title()
+            name = str(row.get('party_name', '')).strip().title()
+            if not name or name == "Nan":
+                continue
+                
             phone = str(row.get('phone', '')).strip()
+            if phone == "nan": phone = ""
+            
             gstin = str(row.get('gstin', '')).strip().upper()
-            credit_days = int(row.get('credit_period_days', 15))
-            opening_bal = float(row.get('opening_balance', 0.0))
+            if gstin == "NAN": gstin = ""
+            
+            credit_days = int(row.get('credit_period_days', 15) or 15)
+            opening_bal = float(row.get('opening_balance', 0.0) or 0.0)
             as_on_date = str(row.get('as_on_date', datetime.now().strftime("%Y-%m-%d"))).strip()[:10]
+            if as_on_date == "nan" or not as_on_date: as_on_date = datetime.now().strftime("%Y-%m-%d")
+            
             created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             cursor.execute("""
@@ -357,8 +333,55 @@ def bulk_save_parties(df_parties):
             """, (name, phone, gstin, credit_days, opening_bal, as_on_date, created_date))
             success_count += 1
         except Exception as e:
-            print(f"Skipping party row due to error: {e}")
+            errors.append(f"Row {idx+2}: {e}")
             
     conn.commit()
     conn.close()
-    return success_count
+    return success_count, errors
+
+
+def bulk_save_purchase_invoices(df_invoices):
+    """Saves purchase invoices in bulk, auto-cleaning column headers and catching errors."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Clean column names
+    df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
+    
+    success_count = 0
+    errors = []
+    
+    for idx, row in df_invoices.iterrows():
+        try:
+            party_name = str(row.get('party_name', '')).strip().title()
+            inv_no = str(row.get('invoice_number', '')).strip()
+            inv_date = str(row.get('invoice_date', '')).strip()[:10]
+            amount = float(row.get('bill_amount', 0.0) or 0.0)
+            
+            if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
+                continue
+            
+            # Find party_id
+            cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
+            party_row = cursor.fetchone()
+            
+            if party_row:
+                p_id, credit_days = party_row[0], party_row[1]
+                
+                inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
+                due_dt = inv_dt + timedelta(days=int(credit_days))
+                due_date_str = due_dt.strftime("%Y-%m-%d")
+                
+                cursor.execute("""
+                    INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
+                """, (p_id, inv_no, inv_date, due_date_str, amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                success_count += 1
+            else:
+                errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List. Register the party first!")
+        except Exception as e:
+            errors.append(f"Row {idx+2}: {e}")
+            
+    conn.commit()
+    conn.close()
+    return success_count, errors
