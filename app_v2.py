@@ -6,9 +6,7 @@ import io
 
 from database_v2 import (
     init_clean_database, get_parties_df, save_party, update_party, delete_party,
-    get_financial_openings_df, save_financial_opening,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
-    record_balance_correction, get_adjustment_logs,
     record_distributor_payment, get_distributor_payments_df,
     bulk_save_parties,
     extract_invoice_from_image, extract_payment_from_image
@@ -23,9 +21,6 @@ USERS = {
     "accounts": {"pin": "2222", "role": "Accountant"}
 }
 
-# ==========================================
-# 1. LOGIN SCREEN
-# ==========================================
 if "logged_in_user" not in st.session_state:
     st.session_state.logged_in_user = None
 
@@ -43,9 +38,6 @@ if not st.session_state.logged_in_user:
                 st.error("Invalid PIN")
     st.stop()
 
-# ==========================================
-# 2. COMPACT TOP-LEFT TITLE & TOP-RIGHT BADGE
-# ==========================================
 current_user = st.session_state.logged_in_user
 user_role = USERS[current_user]["role"]
 
@@ -70,10 +62,6 @@ with header_col2:
         st.rerun()
 
 st.divider()
-
-# ==========================================
-# 3. FRONT-PAGE DASHBOARD SECTIONS
-# ==========================================
 
 # --- SECTION 1: SHOW OUTSTANDINGS TOGGLE ---
 with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", expanded=False):
@@ -119,7 +107,6 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
                         st.info("No unpaid purchase bills recorded.")
     else:
         st.info("No parties or purchase dues found yet.")
-
 
 # --- SECTION 2: AI SCAN NEW BILL & AI SCAN BILL PAID ---
 col_op1, col_op2 = st.columns(2)
@@ -206,7 +193,6 @@ with col_op2:
                                 st.warning("Extracted amount was 0 or invalid.")
                         else:
                             st.error(f"Party '{extracted.get('party_name')}' not found in Master List. Please register them first.")
-
 
 # --- SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT ---
 with st.container(border=True):
@@ -300,7 +286,6 @@ with st.container(border=True):
                         st.error("Please check the confirmation box to enable deletion.")
         else:
             st.info("No parties registered in the system yet.")
-
 
 # --- SECTION 4: EXPORT DATA TO EXCEL ---
 with st.container(border=True):
