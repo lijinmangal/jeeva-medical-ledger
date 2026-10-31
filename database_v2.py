@@ -3,9 +3,15 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 import os
-from google import genai
-from PIL import Image
 import streamlit as st
+
+# Safe AI Imports (prevents app crashes if package is missing)
+try:
+    from google import genai
+    from PIL import Image
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
 
 DB_FILE = "medical_store_v2.db"
 
@@ -310,6 +316,8 @@ def get_distributor_payments_df() -> pd.DataFrame:
     return df
 
 def extract_invoice_from_image(image_file):
+    if not AI_AVAILABLE:
+        return {"error": "google-genai package not installed."}
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
         return {"error": "Gemini API key not found in environment or secrets."}
@@ -337,6 +345,8 @@ def extract_invoice_from_image(image_file):
         return {"error": str(e)}
 
 def extract_payment_from_image(image_file):
+    if not AI_AVAILABLE:
+        return {"error": "google-genai package not installed."}
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
         return {"error": "Gemini API key not found in environment or secrets."}
