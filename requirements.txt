@@ -5,3 +5,4 @@ pillow
 pydantic
 google-genai
 python-calamine
+xlrd
