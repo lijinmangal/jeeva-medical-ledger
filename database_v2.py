@@ -191,6 +191,45 @@ def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, creat
     conn.commit()
     conn.close()
 
+def bulk_save_purchase_invoices(df_invoices):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
+    success_count = 0
+    errors = []
+    
+    for idx, row in df_invoices.iterrows():
+        try:
+            party_name = str(row.get('party_name', '')).strip().title()
+            inv_no = str(row.get('invoice_number', '')).strip()
+            inv_date = str(row.get('invoice_date', '')).strip()[:10]
+            amount = safe_float(row.get('bill_amount'), 0.0)
+            
+            if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
+                continue
+            
+            cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
+            party_row = cursor.fetchone()
+            
+            if party_row:
+                p_id, credit_days = party_row[0], party_row[1]
+                inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
+                due_dt = inv_dt + timedelta(days=int(credit_days))
+                due_date_str = due_dt.strftime("%Y-%m-%d")
+                
+                cursor.execute("""
+                    INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
+                """, (p_id, inv_no, inv_date, due_date_str, amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                success_count += 1
+            else:
+                errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
+        except Exception as e:
+            errors.append(f"Row {idx+2}: {e}")
+    conn.commit()
+    conn.close()
+    return success_count, errors
+
 def get_purchase_invoices_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     query = """
