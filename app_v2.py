@@ -354,6 +354,8 @@ with st.container(border=True):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_pay.to_excel(writer, index=False, sheet_name='Payments')
             st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 # ==========================================
 # SECTION 5: QUICK DAILY DISTRIBUTOR PAYMENT & BILL CLEARING
 # ==========================================
