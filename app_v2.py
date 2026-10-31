@@ -10,8 +10,8 @@ from database_v2 import (
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
     record_balance_correction, get_adjustment_logs,
     record_distributor_payment, get_distributor_payments_df,
-    bulk_save_parties, bulk_save_purchase_invoices,
-    extract_payment_from_image
+    bulk_save_parties,
+    extract_invoice_from_image, extract_payment_from_image
 )
 
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
@@ -121,32 +121,57 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
         st.info("No parties or purchase dues found yet.")
 
 
-# --- SECTION 2: ADD NEW BILLS & FEED DAILY BILL PAID (AI VISION) ---
+# --- SECTION 2: AI SCAN NEW BILL & AI SCAN BILL PAID ---
 col_op1, col_op2 = st.columns(2)
 
 with col_op1:
     with st.container(border=True):
-        st.subheader("📥 Bulk Add New Bills (Excel)")
-        st.markdown("Upload billing software export with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
-        uploaded_inv_file = st.file_uploader("Upload Purchase Bills Excel/CSV", type=["xlsx", "xls", "csv"], key="dash_inv_up")
+        st.subheader("📥 AI Scan New Purchase Bill (Image)")
+        st.markdown("Upload photo of distributor purchase bill/invoice to extract and save.")
+        uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key="ai_bill_up")
         
-        if uploaded_inv_file:
-            try:
-                df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file)
-                if st.button("🚀 Process & Import Bills"):
-                    count, errors = bulk_save_purchase_invoices(df_inv_upload)
-                    if count > 0: st.success(f"Imported {count} bills successfully!")
-                    if errors:
-                        st.error(f"Encountered {len(errors)} issues:")
-                        for err in errors[:5]: st.warning(err)
-                    if count > 0: st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+        if uploaded_bill_img:
+            st.image(uploaded_bill_img, caption="Uploaded Purchase Bill", width=250)
+            if st.button("🔍 Extract & Save Purchase Bill via AI"):
+                with st.spinner("Gemini AI is scanning the invoice..."):
+                    extracted_bill = extract_invoice_from_image(uploaded_bill_img)
+                    if "error" in extracted_bill:
+                        st.error(f"AI Extraction Error: {extracted_bill['error']}")
+                    else:
+                        st.success("Extracted Bill Details Successfully!")
+                        st.json(extracted_bill)
+                        
+                        df_parties = get_parties_df()
+                        p_name_raw = str(extracted_bill.get("party_name", "")).strip()
+                        matched_party = df_parties[df_parties["party_name"].str.contains(p_name_raw, case=False, na=False)]
+                        
+                        if not matched_party.empty:
+                            p_id = int(matched_party.iloc[0]["party_id"])
+                            credit_days = int(matched_party.iloc[0]["credit_period_days"])
+                            inv_amt = float(extracted_bill.get("bill_amount", 0.0))
+                            inv_no = str(extracted_bill.get("invoice_number", "INV-AI"))
+                            inv_date = str(extracted_bill.get("invoice_date", date.today().strftime("%Y-%m-%d")))
+                            
+                            if inv_amt > 0:
+                                save_purchase_invoice(
+                                    party_id=p_id,
+                                    inv_no=inv_no,
+                                    inv_date=inv_date,
+                                    credit_days=credit_days,
+                                    amount=inv_amt,
+                                    created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                )
+                                st.success(f"Saved Purchase Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
+                                st.rerun()
+                            else:
+                                st.warning("Extracted bill amount was 0 or invalid.")
+                        else:
+                            st.error(f"Party '{p_name_raw}' not found in Master List. Please register them first.")
 
 with col_op2:
     with st.container(border=True):
         st.subheader("🤖 AI Scan Daily Finance / Bill Paid")
-        st.markdown("Upload image of daily finance sheet or payment receipt to extract & feed payment.")
+        st.markdown("Upload image of payment receipt or daily finance sheet to record payment.")
         uploaded_slip = st.file_uploader("Upload Payment Slip / Finance Image", type=["png", "jpg", "jpeg"], key="ai_slip_up")
         
         if uploaded_slip:
