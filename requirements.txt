@@ -4,3 +4,4 @@ openpyxl
 pillow
 pydantic
 google-genai
+python-calamine
