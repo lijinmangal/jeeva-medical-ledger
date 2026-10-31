@@ -129,12 +129,15 @@ with tab1:
                 df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file)
                 st.dataframe(df_party_upload.head(), use_container_width=True)
                 if st.button("🚀 Process & Import Parties in Bulk"):
-                    if 'party_name' in df_party_upload.columns:
-                        count = bulk_save_parties(df_party_upload)
+                    count, errors = bulk_save_parties(df_party_upload)
+                    if count > 0:
                         st.success(f"Successfully imported {count} parties!")
+                    if errors:
+                        st.error(f"Encountered {len(errors)} issues:")
+                        for err in errors[:5]:  # Show first 5 errors
+                            st.warning(err)
+                    if count > 0:
                         st.rerun()
-                    else:
-                        st.error("Missing required column: `party_name`")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
 
@@ -235,16 +238,18 @@ with tab3:
                 try:
                     df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file)
                     st.dataframe(df_inv_upload.head(), use_container_width=True)
-                    if st.button("🚀 Process & Import Bills in Bulk"):
-                        req_cols = ['party_name', 'invoice_number', 'invoice_date', 'bill_amount']
-                        if all(col in df_inv_upload.columns for col in req_cols):
-                            count = bulk_save_purchase_invoices(df_inv_upload)
+                    if st.button("🚀 Process & Import Bills in Bulk", key="btn_bulk_invoices"):
+                        count, errors = bulk_save_purchase_invoices(df_inv_upload)
+                        if count > 0:
                             st.success(f"Successfully imported {count} purchase invoices!")
+                        if errors:
+                            st.error(f"Encountered {len(errors)} issues during import:")
+                            for err in errors[:5]:
+                                st.warning(err)
+                        if count > 0:
                             st.rerun()
-                        else:
-                            st.error(f"Missing required columns. File must contain: {req_cols}")
-                except Exception as e:
-                    st.error(f"Error reading file: {e}")
+                    except Exception as e:
+                        st.error(f"Error reading file: {e}")
 
         st.divider()
         st.write("### Active Purchase Bills & Due Date Status")
