@@ -248,7 +248,7 @@ with tab3:
                                 st.warning(err)
                         if count > 0:
                             st.rerun()
-                    except Exception as e:
+                except Exception as e:
                         st.error(f"Error reading file: {e}")
 
         st.divider()
