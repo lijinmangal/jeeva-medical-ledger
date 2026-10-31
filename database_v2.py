@@ -13,7 +13,6 @@ def init_clean_database():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # 1. Parties Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS parties (
             party_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,7 +26,6 @@ def init_clean_database():
         )
     """)
 
-    # 2. Purchase Invoices Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS purchase_invoices (
             invoice_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +40,6 @@ def init_clean_database():
         )
     """)
 
-    # 3. Financial Openings Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS financial_openings (
             opening_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +51,6 @@ def init_clean_database():
         )
     """)
 
-    # 4. Outstanding Adjustments Audit Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS outstanding_adjustments (
             adjustment_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,7 +64,6 @@ def init_clean_database():
         )
     """)
 
-    # 5. Distributor Payments Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS distributor_payments (
             payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +80,6 @@ def init_clean_database():
     conn.commit()
     conn.close()
 
-# --- SAFE NUMBER PARSERS ---
 def safe_int(val, default=15):
     if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
         return default
@@ -102,7 +96,6 @@ def safe_float(val, default=0.0):
     except Exception:
         return default
 
-# --- PARTY HELPERS ---
 def get_parties_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM parties ORDER BY party_name ASC", conn)
@@ -184,7 +177,6 @@ def bulk_save_parties(df_parties):
     conn.close()
     return success_count, errors
 
-# --- INVOICE HELPERS ---
 def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
     inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
     due_dt = inv_dt + timedelta(days=credit_days)
@@ -211,35 +203,6 @@ def get_purchase_invoices_df() -> pd.DataFrame:
     conn.close()
     return df
 
-# --- AUDIT & CORRECTIONS ---
-def record_balance_correction(party_id, new_opening_balance, reason, admin_user):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT opening_balance FROM parties WHERE party_id = ?", (party_id,))
-    row = cursor.fetchone()
-    prev_bal = row[0] if row else 0.0
-
-    cursor.execute("UPDATE parties SET opening_balance = ? WHERE party_id = ?", (new_opening_balance, party_id))
-    cursor.execute("""
-        INSERT INTO outstanding_adjustments (party_id, previous_balance, new_balance, reason, adjusted_by, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (party_id, prev_bal, new_opening_balance, reason, admin_user, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
-
-def get_adjustment_logs() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
-    query = """
-        SELECT a.adjustment_id, p.party_name, a.previous_balance, a.new_balance, a.reason, a.adjusted_by, a.timestamp
-        FROM outstanding_adjustments a
-        JOIN parties p ON a.party_id = p.party_id
-        ORDER BY a.adjustment_id DESC
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-
-# --- DUES SUMMARY ---
 def get_party_dues_summary() -> pd.DataFrame:
     parties_df = get_parties_df()
     if parties_df.empty: return pd.DataFrame()
@@ -280,23 +243,6 @@ def get_party_dues_summary() -> pd.DataFrame:
         })
     return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
 
-# --- FINANCIAL OPENINGS & PAYMENTS ---
-def get_financial_openings_df() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM financial_openings ORDER BY opening_id DESC", conn)
-    conn.close()
-    return df
-
-def save_financial_opening(category, desc, amount, nature, created_date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO financial_openings (item_category, description, amount, entry_nature, created_at)
-        VALUES (?, ?, ?, ?, ?)
-    """, (category, desc, amount, nature, created_date))
-    conn.commit()
-    conn.close()
-
 def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -324,7 +270,6 @@ def get_distributor_payments_df() -> pd.DataFrame:
     conn.close()
     return df
 
-# --- GEMINI AI VISION SCANNERS ---
 def extract_invoice_from_image(image_file):
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
