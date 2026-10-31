@@ -125,6 +125,26 @@ def save_party(name, phone, gstin, credit_days, opening_bal, as_on_date, created
     conn.commit()
     conn.close()
 
+def update_party(party_id, name, phone, gstin, credit_days, opening_bal, as_on_date):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE parties 
+        SET party_name = ?, phone = ?, gstin = ?, credit_period_days = ?, opening_balance = ?, as_on_date = ?
+        WHERE party_id = ?
+    """, (name, phone, gstin, credit_days, opening_bal, as_on_date, party_id))
+    conn.commit()
+    conn.close()
+
+def delete_party(party_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM purchase_invoices WHERE party_id = ?", (party_id,))
+    cursor.execute("DELETE FROM distributor_payments WHERE party_id = ?", (party_id,))
+    cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
+    conn.commit()
+    conn.close()
+
 def bulk_save_parties(df_parties):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -370,29 +390,3 @@ def extract_payment_from_image(image_file):
         return json.loads(text_resp)
     except Exception as e:
         return {"error": str(e)}
-# --- Add to database_v2.py ---
-
-def delete_party(party_id):
-    """Deletes a party and all associated purchase invoices and payment records."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM purchase_invoices WHERE party_id = ?", (party_id,))
-    cursor.execute("DELETE FROM distributor_payments WHERE party_id = ?", (party_id,))
-    cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
-    conn.commit()
-    conn.close()
-# --- Add to database_v2.py ---
-
-# --- Add to database_v2.py ---
-
-def update_party(party_id, name, phone, gstin, credit_days, opening_bal, as_on_date):
-    """Updates an existing party by its unique party_id."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE parties 
-        SET party_name = ?, phone = ?, gstin = ?, credit_period_days = ?, opening_balance = ?, as_on_date = ?
-        WHERE party_id = ?
-    """, (name, phone, gstin, credit_days, opening_bal, as_on_date, party_id))
-    conn.commit()
-    conn.close()
