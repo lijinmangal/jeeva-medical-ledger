@@ -277,22 +277,35 @@ def get_party_dues_summary() -> pd.DataFrame:
     parties_df = get_parties_df()
     if parties_df.empty: return pd.DataFrame()
     invoices_df = get_purchase_invoices_df()
+    payments_df = get_distributor_payments_df()
     summary_list = []
     today = datetime.now().date()
 
     for _, party in parties_df.iterrows():
         p_id, p_name = party["party_id"], party["party_name"]
         opening_bal, as_on = party["opening_balance"], party["as_on_date"]
-        unpaid_inv_total = 0.0
+        
+        # 1. Total purchase bills for this party
+        total_bills = 0.0
         earliest_due = None
-
         if not invoices_df.empty:
-            party_invs = invoices_df[(invoices_df["party_id"] == p_id) & (invoices_df["status"] == "UNPAID")]
+            party_invs = invoices_df[invoices_df["party_id"] == p_id]
             if not party_invs.empty:
-                unpaid_inv_total = party_invs["bill_amount"].sum()
-                earliest_due = party_invs["due_date"].min()
+                total_bills = party_invs["bill_amount"].sum()
+                unpaid_party_invs = party_invs[party_invs["status"] == "UNPAID"]
+                if not unpaid_party_invs.empty:
+                    earliest_due = unpaid_party_invs["due_date"].min()
 
-        total_due = opening_bal + unpaid_inv_total
+        # 2. Total payments made to this party
+        total_payments = 0.0
+        if not payments_df.empty and "party_id" in payments_df.columns:
+            party_pays = payments_df[payments_df["party_id"] == p_id]
+            if not party_pays.empty:
+                total_payments = party_pays["amount_paid"].sum()
+
+        # 3. Net Ledger Balance Due = Opening + Bills - Payments
+        total_due = opening_bal + total_bills - total_payments
+        
         urgency = "🟢 Safe"
         ref_date_str = earliest_due if earliest_due else as_on
 
@@ -306,8 +319,12 @@ def get_party_dues_summary() -> pd.DataFrame:
             except Exception: pass
 
         summary_list.append({
-            "party_name": p_name, "opening_balance": opening_bal, "opening_as_on": as_on,
-            "unpaid_bills_total": unpaid_inv_total, "total_due_amount": total_due,
+            "party_name": p_name, 
+            "opening_balance": opening_bal, 
+            "opening_as_on": as_on,
+            "total_bills": total_bills,
+            "total_payments": total_payments,
+            "total_due_amount": total_due,
             "earliest_due_date": earliest_due if earliest_due else "Opening Only",
             "Payment_Urgency": urgency
         })
@@ -331,7 +348,7 @@ def get_distributor_payments_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     try:
         df = pd.read_sql_query("""
-            SELECT dp.payment_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
+            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
             FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
             ORDER BY dp.payment_id DESC
         """, conn)
