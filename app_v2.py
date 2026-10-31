@@ -209,3 +209,46 @@ with st.container(border=True):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_pay.to_excel(writer, index=False, sheet_name='Payments')
             st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+# --- Add into app_v2.py dashboard ---
+
+with st.expander("🛠️ Manage Existing Purchase Parties (Edit / Delete)"):
+    df_parties_mgmt = get_parties_df()
+    if not df_parties_mgmt.empty:
+        selected_party_name = st.selectbox("Select Party to Edit or Delete", df_parties_mgmt["party_name"].tolist(), key="mgmt_party_sel")
+        party_record = df_parties_mgmt[df_parties_mgmt["party_name"] == selected_party_name].iloc[0]
+        
+        edit_tab, delete_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
+        
+        with edit_tab:
+            with st.form("edit_party_form"):
+                e_name = st.text_input("Party Name", value=party_record["party_name"])
+                e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
+                e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
+                e_credit = st.number_input("Credit Period (Days)", min_value=0, value=int(party_record.get("credit_period_days", 15)))
+                e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=float(party_record.get("opening_balance", 0.0)), step=100.0)
+                
+                if st.form_submit_button("💾 Save Changes"):
+                    save_party(
+                        name=e_name.strip().title(),
+                        phone=e_phone.strip(),
+                        gstin=e_gstin.strip().upper(),
+                        credit_days=e_credit,
+                        opening_bal=e_opening,
+                        as_on_date=str(party_record.get("as_on_date", date.today().strftime("%Y-%m-%d"))),
+                        created_date=str(party_record.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    )
+                    st.success(f"Successfully updated details for **{e_name.strip().title()}**!")
+                    st.rerun()
+                    
+        with delete_tab:
+            st.warning(f"⚠️ Deleting **{selected_party_name}** will also remove all associated purchase invoices and payment records permanently.")
+            confirm_del = st.checkbox(f"I confirm I want to delete {selected_party_name}", key="confirm_delete_chk")
+            if st.button("🗑️ Permanently Delete Party", type="primary", key="btn_del_party"):
+                if confirm_del:
+                    delete_party(int(party_record["party_id"]))
+                    st.success(f"Successfully deleted {selected_party_name}.")
+                    st.rerun()
+                else:
+                    st.error("Please check the confirmation box to enable deletion.")
+    else:
+        st.info("No parties registered in the system yet.")
