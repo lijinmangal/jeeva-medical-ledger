@@ -180,22 +180,62 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                     st.error(f"Party '{p_name_raw}' not found in Master List.")
 
             with bill_tab_excel:
-                st.markdown("Upload Excel/CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
-                uploaded_inv_file = st.file_uploader("Upload Purchase Bills Excel/CSV", type=["xlsx", "xls", "csv"], key="dash_inv_up")
-                
-                if uploaded_inv_file:
-                    try:
-                        df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file)
-                        st.dataframe(df_inv_upload.head(3), use_container_width=True)
-                        if st.button("🚀 Process & Import Bills in Bulk"):
+            st.markdown("Upload Excel/CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
+            uploaded_inv_file = st.file_uploader("Upload Purchase Bills Excel/CSV", type=["xlsx", "xls", "csv"], key="dash_inv_up")
+            
+            if uploaded_inv_file:
+                try:
+                    df_inv_upload = pd.read_csv(uploaded_inv_file) if uploaded_inv_file.name.endswith('.csv') else pd.read_excel(uploaded_inv_file, engine='openpyxl')
+                    df_inv_upload.columns = [str(c).strip().lower().replace(" ", "_") for c in df_inv_upload.columns]
+                    
+                    # Fetch registered parties for validation
+                    df_master_parties = get_parties_df()
+                    existing_parties = set(df_master_parties["party_name"].str.strip().str.title().tolist()) if not df_master_parties.empty else set()
+                    
+                    def validate_row(row):
+                        p_name = str(row.get('party_name', '')).strip().title()
+                        inv_no = str(row.get('invoice_number', '')).strip()
+                        amt = safe_float(row.get('bill_amount'), 0.0)
+                        
+                        if not p_name or p_name == "Nan" or pd.isna(row.get('party_name')):
+                            return "❌ Missing Party Name"
+                        if not inv_no or inv_no == "Nan":
+                            return "❌ Missing Invoice Number"
+                        if amt <= 0:
+                            return "❌ Invalid Amount"
+                        if p_name in existing_parties:
+                            return "✅ Valid"
+                        else:
+                            return "❌ Party Not Found in Master"
+                            
+                    df_inv_upload["Validation_Status"] = df_inv_upload.apply(validate_row, axis=1)
+                    
+                    # Styling function to highlight errors in red
+                    def style_status(val):
+                        if "✅" in str(val):
+                            return "background-color: #e2efda; color: #375623; font-weight: bold;"
+                        else:
+                            return "background-color: #ffcccc; color: #c00000; font-weight: bold;"
+                            
+                    st.markdown("### 📋 Step 1: Review Upload Preview & Party Match")
+                    st.dataframe(df_inv_upload.style.applymap(style_status, subset=['Validation_Status']), use_container_width=True, hide_index=True)
+                    
+                    invalid_count = (df_inv_upload["Validation_Status"] != "✅ Valid").sum()
+                    
+                    if invalid_count > 0:
+                        st.error(f"⚠️ Found **{invalid_count}** problematic rows highlighted in red above. Please correct your Excel file and re-upload, or register the missing parties in the **Party Master** tab first.")
+                    else:
+                        st.success("✨ All 112+ entries and party names match your Master List perfectly! Ready for import.")
+                        if st.button("🚀 Step 2: Confirm & Import Verified Bills", type="primary", key="btn_confirm_import"):
                             count, errors = bulk_save_purchase_invoices(df_inv_upload)
-                            if count > 0: st.success(f"Imported {count} bills successfully!")
+                            if count > 0:
+                                st.success(f"Successfully imported {count} purchase bills!")
+                                st.rerun()
                             if errors:
-                                st.error(f"Encountered {len(errors)} issues:")
-                                for err in errors[:5]: st.warning(err)
-                            if count > 0: st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                                for err in errors:
+                                    st.warning(err)
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
 
             with bill_tab_manual:
                 st.markdown("Manually enter purchase bill details.")
