@@ -354,3 +354,65 @@ with st.container(border=True):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_pay.to_excel(writer, index=False, sheet_name='Payments')
             st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+# ==========================================
+# SECTION 5: QUICK DAILY DISTRIBUTOR PAYMENT & BILL CLEARING
+# ==========================================
+with st.container(border=True):
+    st.subheader("💸 Record Daily Distributor Payment & Clear Bills")
+    st.markdown("Quickly log daily payments made to suppliers and optionally clear specific unpaid bills.")
+
+    df_parties_pay = get_parties_df()
+    if not df_parties_pay.empty:
+        pay_party = st.selectbox("Select Distributor to Pay *", df_parties_pay["party_name"].tolist(), key="dash_pay_party_sel")
+        party_row = df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]
+        party_id = int(party_row["party_id"])
+
+        # Fetch unpaid bills for this specific party
+        df_invoices = get_purchase_invoices_df()
+        unpaid_party_bills = pd.DataFrame()
+        if not df_invoices.empty:
+            unpaid_party_bills = df_invoices[(df_invoices["party_id"] == party_id) & (df_invoices["status"] == "UNPAID")]
+
+        selected_invoice_ids = []
+        if not unpaid_party_bills.empty:
+            with st.expander(f"📦 Select Unpaid Bills to Clear for {pay_party} (Optional)"):
+                for _, bill in unpaid_party_bills.iterrows():
+                    checked = st.checkbox(
+                        f"Invoice: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", 
+                        key=f"dash_inv_chk_{bill['invoice_id']}"
+                    )
+                    if checked:
+                        selected_invoice_ids.append(int(bill['invoice_id']))
+        else:
+            st.info(f"ℹ️ No specific unpaid invoices found for {pay_party}. Payment will be recorded as a general credit/advance adjustment.")
+
+        with st.form("dash_payment_form"):
+            pc1, pc2 = st.columns(2)
+            pay_amount = pc1.number_input("Payment Amount Paid (₹) *", min_value=0.0, step=100.0, key="dash_pay_amt")
+            pay_mode = pc2.selectbox("Payment Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"], key="dash_pay_mode")
+            pay_notes = st.text_input("Payment Notes / Reference No. (Optional)", key="dash_pay_notes")
+
+            if st.form_submit_button("✅ Confirm & Record Payment"):
+                if pay_amount > 0:
+                    record_distributor_payment(
+                        party_id=party_id,
+                        invoice_ids_to_clear=selected_invoice_ids,
+                        payment_amount=pay_amount,
+                        payment_mode=pay_mode,
+                        notes=pay_notes.strip(),
+                        recorded_by=current_user
+                    )
+                    st.success(f"Successfully recorded payment of ₹{pay_amount:,.2f} to **{pay_party}**!")
+                    st.rerun()
+                else:
+                    st.error("Please enter a valid payment amount greater than 0.")
+
+        # Show recent payment history preview
+        with st.expander("📜 View Recent Payment History"):
+            df_payments = get_distributor_payments_df()
+            if not df_payments.empty:
+                st.dataframe(df_payments.head(10), use_container_width=True, hide_index=True)
+            else:
+                st.info("No distributor payments recorded yet.")
+    else:
+        st.warning("Please register at least one purchase party first.")
