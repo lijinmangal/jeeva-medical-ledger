@@ -7,7 +7,7 @@ import io
 from database_v2 import (
     init_clean_database, get_parties_df, save_party, update_party, delete_party,
     save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
-    record_distributor_payment, get_distributor_payments_df,
+    record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
     bulk_save_parties, bulk_save_purchase_invoices,
     extract_invoice_from_image, extract_payment_from_image
 )
@@ -21,6 +21,9 @@ USERS = {
     "accounts": {"pin": "2222", "role": "Accountant"}
 }
 
+# ==========================================
+# 1. LOGIN SCREEN
+# ==========================================
 if "logged_in_user" not in st.session_state:
     st.session_state.logged_in_user = None
 
@@ -38,6 +41,9 @@ if not st.session_state.logged_in_user:
                 st.error("Invalid PIN")
     st.stop()
 
+# ==========================================
+# 2. COMPACT TOP-LEFT TITLE & TOP-RIGHT BADGE
+# ==========================================
 current_user = st.session_state.logged_in_user
 user_role = USERS[current_user]["role"]
 
@@ -63,7 +69,9 @@ with header_col2:
 
 st.divider()
 
-# --- SECTION 1: SHOW OUTSTANDINGS TOGGLE ---
+# ==========================================
+# SECTION 1: SHOW OUTSTANDINGS TOGGLE
+# ==========================================
 with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", expanded=False):
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
@@ -83,12 +91,18 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
             total_due = party_row["total_due_amount"]
             urgency = party_row["Payment_Urgency"]
             opening_bal = party_row["opening_balance"]
+            total_bills = party_row["total_bills"]
+            total_pays = party_row["total_payments"]
             opening_as_on = party_row["opening_as_on"]
 
-            expander_label = f"🏢 **{p_name}** | Total Due: **₹{total_due:,.2f}** — {urgency}"
+            expander_label = f"🏢 **{p_name}** | Net Due: **₹{total_due:,.2f}** — {urgency}"
             
             with st.expander(expander_label):
-                st.markdown(f"🔹 **Opening Balance Due:** ₹{opening_bal:,.2f} *(Baseline As on: {opening_as_on})*")
+                c_s1, c_s2, c_s3 = st.columns(3)
+                c_s1.markdown(f"🔹 **Opening:** ₹{opening_bal:,.2f} *(As on {opening_as_on})*")
+                c_s2.markdown(f"📦 **Total Bills:** ₹{total_bills:,.2f}")
+                c_s3.markdown(f"💸 **Total Paid:** ₹{total_pays:,.2f}")
+                
                 if not df_invoices.empty:
                     party_bills = df_invoices[(df_invoices["party_name"] == p_name) & (df_invoices["status"] == "UNPAID")]
                     if not party_bills.empty:
@@ -108,7 +122,9 @@ with st.expander("📊 Show Market Outstandings & Collapsible Party Breakdown", 
     else:
         st.info("No parties or purchase dues found yet.")
 
-# --- SECTION 2: ADD NEW BILLS (AI Scan, Excel, Manual) & AI PAYMENT SCANNER ---
+# ==========================================
+# SECTION 2: ADD NEW BILLS & AI PAYMENT SCANNER
+# ==========================================
 col_op1, col_op2 = st.columns(2)
 
 with col_op1:
@@ -192,7 +208,7 @@ with col_op1:
                         st.success(f"Successfully saved bill **{m_inv_no}** for {m_party}!")
                         st.rerun()
             else:
-                        st.warning("Please register at least one purchase party first.")
+                st.warning("Please register at least one purchase party first.")
 
 with col_op2:
     with st.container(border=True):
@@ -233,7 +249,9 @@ with col_op2:
                         else:
                             st.error(f"Party '{extracted.get('party_name')}' not found.")
 
-# --- SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT ---
+# ==========================================
+# SECTION 3: PARTY SETUP & EDIT/DELETE MANAGEMENT
+# ==========================================
 with st.container(border=True):
     st.subheader("📋 Purchase Parties Master Setup & Management")
     
@@ -326,7 +344,9 @@ with st.container(border=True):
         else:
             st.info("No parties registered in the system yet.")
 
-# --- SECTION 4: EXPORT DATA TO EXCEL ---
+# ==========================================
+# SECTION 4: EXPORT DATA TO EXCEL
+# ==========================================
 with st.container(border=True):
     st.subheader("💾 Download System Data as Excel")
     col_dl1, col_dl2, col_dl3 = st.columns(3)
@@ -355,13 +375,12 @@ with st.container(border=True):
                 df_pay.to_excel(writer, index=False, sheet_name='Payments')
             st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-
 # ==========================================
-# SECTION 5: QUICK DAILY DISTRIBUTOR PAYMENT & BILL CLEARING
+# SECTION 5: DAILY PAYMENT RECORDING & DELETION MANAGER
 # ==========================================
 with st.container(border=True):
-    st.subheader("💸 Record Daily Distributor Payment & Clear Bills")
-    st.markdown("Quickly log daily payments made to suppliers and optionally clear specific unpaid bills.")
+    st.subheader("💸 Record Daily Distributor Payment & Manage History")
+    st.markdown("Quickly log daily payments made to suppliers, clear specific bills, or remove wrongly recorded entries.")
 
     df_parties_pay = get_parties_df()
     if not df_parties_pay.empty:
@@ -369,7 +388,6 @@ with st.container(border=True):
         party_row = df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]
         party_id = int(party_row["party_id"])
 
-        # Fetch unpaid bills for this specific party
         df_invoices = get_purchase_invoices_df()
         unpaid_party_bills = pd.DataFrame()
         if not df_invoices.empty:
@@ -409,18 +427,7 @@ with st.container(border=True):
                 else:
                     st.error("Please enter a valid payment amount greater than 0.")
 
-        # Show recent payment history preview
-        with st.expander("📜 View Recent Payment History"):
-            df_payments = get_distributor_payments_df()
-            if not df_payments.empty:
-                st.dataframe(df_payments.head(10), use_container_width=True, hide_index=True)
-            else:
-                st.info("No distributor payments recorded yet.")
-    else:
-        st.warning("Please register at least one purchase party first.")
-# --- Replace payment history expander in app_v2.py ---
-
-        with st.expander("📜 View & Manage Payment History"):
+        with st.expander("📜 View & Manage Payment History (Delete Wrong Entries)"):
             df_payments = get_distributor_payments_df()
             if not df_payments.empty:
                 st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "timestamp", "recorded_by", "notes"]], use_container_width=True, hide_index=True)
@@ -437,7 +444,6 @@ with st.container(border=True):
                 
                 if st.button("🗑️ Delete Selected Payment", type="primary", key="btn_del_payment"):
                     try:
-                        # Extract payment_id from the selection string
                         p_id_extracted = int(selected_pay_to_del.split("|")[0].replace("ID:", "").strip())
                         delete_distributor_payment(p_id_extracted)
                         st.success(f"Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
@@ -446,3 +452,5 @@ with st.container(border=True):
                         st.error(f"Error deleting payment: {e}")
             else:
                 st.info("No distributor payments recorded yet.")
+    else:
+        st.warning("Please register at least one purchase party first.")
