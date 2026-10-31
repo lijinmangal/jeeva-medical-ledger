@@ -291,33 +291,52 @@ def get_distributor_payments_df() -> pd.DataFrame:
     return df
 # Add to database_v2.py
 
+def safe_int(val, default=15):
+    """Safely converts a spreadsheet value to an integer, handling NaN/empty cells."""
+    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
+        return default
+    try:
+        return int(float(val))
+    except Exception:
+        return default
+
+def safe_float(val, default=0.0):
+    """Safely converts a spreadsheet value to a float, handling NaN/empty cells."""
+    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
+        return default
+    try:
+        return float(val)
+    except Exception:
+        return default
+
+
 def bulk_save_parties(df_parties):
-    """Saves parties in bulk, auto-cleaning column headers and catching errors."""
+    """Saves parties in bulk with safe column and NaN handling."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Clean column names (lowercase and strip spaces)
     df_parties.columns = [str(c).strip().lower().replace(" ", "_") for c in df_parties.columns]
-    
     success_count = 0
     errors = []
     
     for idx, row in df_parties.iterrows():
         try:
             name = str(row.get('party_name', '')).strip().title()
-            if not name or name == "Nan":
+            if not name or name == "Nan" or pd.isna(row.get('party_name')):
                 continue
                 
             phone = str(row.get('phone', '')).strip()
-            if phone == "nan": phone = ""
+            if phone == "nan" or pd.isna(row.get('phone')): phone = ""
             
             gstin = str(row.get('gstin', '')).strip().upper()
-            if gstin == "NAN": gstin = ""
+            if gstin == "NAN" or pd.isna(row.get('gstin')): gstin = ""
             
-            credit_days = int(row.get('credit_period_days', 15) or 15)
-            opening_bal = float(row.get('opening_balance', 0.0) or 0.0)
+            credit_days = safe_int(row.get('credit_period_days'), 15)
+            opening_bal = safe_float(row.get('opening_balance'), 0.0)
+            
             as_on_date = str(row.get('as_on_date', datetime.now().strftime("%Y-%m-%d"))).strip()[:10]
-            if as_on_date == "nan" or not as_on_date: as_on_date = datetime.now().strftime("%Y-%m-%d")
+            if as_on_date == "nan" or not as_on_date or pd.isna(row.get('as_on_date')): 
+                as_on_date = datetime.now().strftime("%Y-%m-%d")
             
             created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -341,13 +360,11 @@ def bulk_save_parties(df_parties):
 
 
 def bulk_save_purchase_invoices(df_invoices):
-    """Saves purchase invoices in bulk, auto-cleaning column headers and catching errors."""
+    """Saves purchase invoices in bulk with safe column and NaN handling."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Clean column names
     df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
-    
     success_count = 0
     errors = []
     
@@ -356,12 +373,11 @@ def bulk_save_purchase_invoices(df_invoices):
             party_name = str(row.get('party_name', '')).strip().title()
             inv_no = str(row.get('invoice_number', '')).strip()
             inv_date = str(row.get('invoice_date', '')).strip()[:10]
-            amount = float(row.get('bill_amount', 0.0) or 0.0)
+            amount = safe_float(row.get('bill_amount'), 0.0)
             
             if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
                 continue
             
-            # Find party_id
             cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
             party_row = cursor.fetchone()
             
