@@ -288,7 +288,7 @@ def extract_invoice_from_image(image_file):
         }
         Return ONLY valid JSON without any markdown formatting or extra text.
         """
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
+        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
         import json
         text_resp = response.text.strip()
         if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
@@ -315,7 +315,7 @@ def extract_payment_from_image(image_file):
         }
         Return ONLY valid JSON without any markdown formatting or extra text.
         """
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
+        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
         import json
         text_resp = response.text.strip()
         if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
