@@ -143,7 +143,32 @@ def delete_party(party_id):
     cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
     conn.commit()
     conn.close()
-
+def parse_date(val):
+    """Safely parses dates from various spreadsheet formats into YYYY-MM-DD."""
+    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
+        return datetime.now().strftime("%Y-%m-%d")
+    
+    if isinstance(val, (datetime, pd.Timestamp)):
+        return val.strftime("%Y-%m-%d")
+        
+    val_str = str(val).strip()
+    
+    # If it's already YYYY-MM-DD with time
+    if len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
+        return val_str[:10]
+        
+    # Try multiple common date formats
+    formats = ["%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d-%b-%y"]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(val_str, fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+            
+    # Fallback to today if format is unrecognized
+    return datetime.now().strftime("%Y-%m-%d")
+    
 def bulk_save_parties(df_parties):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -208,7 +233,7 @@ def bulk_save_purchase_invoices(df_invoices):
         try:
             party_name = str(row.get('party_name', '')).strip().title()
             inv_no = str(row.get('invoice_number', '')).strip()
-            inv_date = str(row.get('invoice_date', '')).strip()[:10]
+            inv_date = parse_date(row.get('invoice_date'))  # <--- Uses flexible date parser!
             amount = safe_float(row.get('bill_amount'), 0.0)
             
             if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
