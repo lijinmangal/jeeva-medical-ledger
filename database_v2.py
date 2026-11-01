@@ -260,19 +260,11 @@ def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, p
     conn.close()
 
 def delete_distributor_payment(payment_id):
-    """Deletes a payment record by its unique payment_id and restores outstandings."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    try:
-        # Optional: If notes contain cleared invoice references, you can parse them, 
-        # or simply delete the payment entry which instantly restores the net outstanding calculation.
-        cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
+    conn.commit()
+    conn.close()
 
 def get_distributor_payments_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
@@ -283,7 +275,6 @@ def get_distributor_payments_df() -> pd.DataFrame:
             ORDER BY dp.payment_id DESC
         """, conn)
     except Exception:
-        # Fallback if table needs migration or columns differ
         df = pd.DataFrame()
     conn.close()
     return df
@@ -309,93 +300,3 @@ def get_party_dues_summary() -> pd.DataFrame:
                 unpaid_party_invs = party_invs[party_invs["status"] == "UNPAID"]
                 if not unpaid_party_invs.empty:
                     earliest_due = unpaid_party_invs["due_date"].min()
-
-        total_payments = 0.0
-        if not payments_df.empty and "party_id" in payments_df.columns:
-            party_pays = payments_df[payments_df["party_id"] == p_id]
-            if not party_pays.empty:
-                total_payments = party_pays["amount_paid"].sum()
-
-        total_due = opening_bal + total_bills - total_payments
-        
-        urgency = "🟢 Safe"
-        ref_date_str = earliest_due if earliest_due else as_on
-
-        if ref_date_str:
-            try:
-                ref_dt = datetime.strptime(str(ref_date_str), "%Y-%m-%d").date()
-                days_left = (ref_dt - today).days
-                if days_left < 0: urgency = f"🔴 OVERDUE ({ref_date_str})"
-                elif days_left <= 3: urgency = f"🟡 Due Soon ({ref_date_str}, {days_left}d)"
-                else: urgency = f"🟢 Safe ({ref_date_str}, {days_left}d)"
-            except Exception: pass
-
-        summary_list.append({
-            "party_name": p_name, 
-            "opening_balance": opening_bal, 
-            "opening_as_on": as_on,
-            "total_bills": total_bills,
-            "total_payments": total_payments,
-            "total_due_amount": total_due,
-            "earliest_due_date": earliest_due if earliest_due else "Opening Only",
-            "Payment_Urgency": urgency
-        })
-    return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
-
-def extract_invoice_from_image(image_file):
-    if not AI_AVAILABLE:
-        return {"error": "google-genai package not installed."}
-    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return {"error": "Gemini API key not found in environment or secrets."}
-    try:
-        client = genai.Client(api_key=api_key)
-        image = Image.open(image_file)
-        prompt = """
-        Analyze this distributor purchase invoice or bill image. 
-        Extract the following details in valid JSON format:
-        {
-            "party_name": "Name of the supplier, distributor, or pharma company",
-            "invoice_number": "Invoice or bill number string",
-            "invoice_date": "Date of invoice in YYYY-MM-DD format",
-            "bill_amount": 0.0
-        }
-        Return ONLY valid JSON without any markdown formatting or extra text.
-        """
-        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
-        import json
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
-        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
-        return json.loads(text_resp)
-    except Exception as e:
-        return {"error": str(e)}
-
-def extract_payment_from_image(image_file):
-    if not AI_AVAILABLE:
-        return {"error": "google-genai package not installed."}
-    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return {"error": "Gemini API key not found in environment or secrets."}
-    try:
-        client = genai.Client(api_key=api_key)
-        image = Image.open(image_file)
-        prompt = """
-        Analyze this daily finance sheet, payment receipt, or distributor payment slip. 
-        Extract the following details in valid JSON format:
-        {
-            "party_name": "Name of the distributor or party paid",
-            "amount_paid": 0.0,
-            "payment_mode": "CASH / UPI / BANK_TRANSFER / CHEQUE",
-            "notes": "Any reference number or notes mentioned"
-        }
-        Return ONLY valid JSON without any markdown formatting or extra text.
-        """
-        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
-        import json
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
-        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
-        return json.loads(text_resp)
-    except Exception as e:
-        return {"error": str(e)}
