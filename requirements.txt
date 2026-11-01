@@ -6,3 +6,9 @@ pydantic
 google-genai
 python-calamine
 xlrd
+streamlit
+pandas
+openpyxl
+google-genai
+pillow
+xlrd
