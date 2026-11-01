@@ -25,6 +25,10 @@ USERS = {
 if "logged_in_user" not in st.session_state:
     st.session_state.logged_in_user = None
 
+# Session state counter to reset file uploaders upon successful submission
+if "reset_counter" not in st.session_state:
+    st.session_state.reset_counter = 0
+
 if not st.session_state.logged_in_user:
     st.title("🔐 Jeeva Medical Store - Secure Portal")
     col1, col2 = st.columns(2)
@@ -72,6 +76,8 @@ with st.sidebar:
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.logged_in_user = None
         st.rerun()
+
+rc = st.session_state.reset_counter
 
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
 if menu_choice == "📊 Dashboard & Market Dues":
@@ -137,7 +143,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
             
             with bill_tab_ai:
                 st.markdown("Upload photo of distributor purchase bill/invoice to extract & save.")
-                uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key="ai_bill_up")
+                uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key=f"ai_bill_up_{rc}")
                 
                 if uploaded_bill_img:
                     st.image(uploaded_bill_img, caption="Uploaded Purchase Bill", width=220)
@@ -163,7 +169,8 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                     
                                     if inv_amt > 0:
                                         save_purchase_invoice(p_id, inv_no, inv_date, credit_days, inv_amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                                        st.success(f"Saved Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
+                                        st.success(f"✅ Successfully saved Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
+                                        st.session_state.reset_counter += 1
                                         st.rerun()
                                     else:
                                         st.warning("Invalid bill amount.")
@@ -172,7 +179,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
 
             with bill_tab_excel:
                 st.markdown("Upload Excel (`.xlsx`, `.xls`) or CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
-                uploaded_inv_file = st.file_uploader("Upload Purchase Bills File", type=["xlsx", "xls", "csv"], key="dash_inv_up")
+                uploaded_inv_file = st.file_uploader("Upload Purchase Bills File", type=["xlsx", "xls", "csv"], key=f"dash_inv_up_{rc}")
                 
                 if uploaded_inv_file:
                     try:
@@ -229,7 +236,8 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                             if st.button("🚀 Step 2: Confirm & Import Verified Bills", type="primary", key="btn_confirm_import"):
                                 count, errors = bulk_save_purchase_invoices(df_inv_upload)
                                 if count > 0:
-                                    st.success(f"Successfully imported {count} purchase bills!")
+                                    st.success(f"✅ Successfully imported {count} purchase bills and cleared form state!")
+                                    st.session_state.reset_counter += 1
                                     st.rerun()
                                 if errors:
                                     for err in errors:
@@ -241,7 +249,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                 st.markdown("Manually enter purchase bill details.")
                 df_parties_manual = get_parties_df()
                 if not df_parties_manual.empty:
-                    with st.form("manual_bill_form"):
+                    with st.form("manual_bill_form", clear_on_submit=True):
                         m_party = st.selectbox("Select Distributor *", df_parties_manual["party_name"].tolist(), key="manual_party_sel")
                         m_inv_no = st.text_input("Invoice Number *", key="manual_inv_no")
                         m_inv_date = st.date_input("Invoice Date", value=date.today(), key="manual_inv_date")
@@ -257,7 +265,8 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                 amount=m_amt,
                                 created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             )
-                            st.success(f"Successfully saved bill **{m_inv_no}** for {m_party}!")
+                            st.success(f"✅ Successfully saved bill **{m_inv_no}** for {m_party} and reset form!")
+                            st.session_state.reset_counter += 1
                             st.rerun()
                 else:
                     st.warning("Please register at least one purchase party first.")
@@ -266,7 +275,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
         with st.container(border=True):
             st.subheader("🤖 AI Scan Daily Finance / Bill Paid")
             st.markdown("Upload image of payment receipt or daily finance sheet to record payment.")
-            uploaded_slip = st.file_uploader("Upload Payment Slip / Finance Image", type=["png", "jpg", "jpeg"], key="ai_slip_up")
+            uploaded_slip = st.file_uploader("Upload Payment Slip / Finance Image", type=["png", "jpg", "jpeg"], key=f"ai_slip_up_{rc}")
             
             if uploaded_slip:
                 st.image(uploaded_slip, caption="Uploaded Finance Slip", width=220)
@@ -294,7 +303,8 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                         notes=extracted.get("notes", "AI Extracted Slip"),
                                         recorded_by=current_user
                                     )
-                                    st.success(f"Recorded payment of ₹{amt:,.2f} for {matched_party.iloc[0]['party_name']}!")
+                                    st.success(f"✅ Successfully recorded payment of ₹{amt:,.2f} for {matched_party.iloc[0]['party_name']} and reset uploader!")
+                                    st.session_state.reset_counter += 1
                                     st.rerun()
                                 else:
                                     st.warning("Invalid payment amount.")
@@ -308,7 +318,7 @@ elif menu_choice == "📋 Party Master & Setup":
         add_tab, bulk_party_tab, edit_del_tab = st.tabs(["➕ Add Single Party", "📤 Bulk Upload Parties", "🛠️ Edit / Delete Party"])
         
         with add_tab:
-            with st.form("party_form"):
+            with st.form("party_form", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
                 p_name = c1.text_input("Party / Distributor Name *")
                 p_phone = c2.text_input("Phone Number")
@@ -329,22 +339,25 @@ elif menu_choice == "📋 Party Master & Setup":
                         as_on_date=p_as_on_date.strftime("%Y-%m-%d"),
                         created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     )
-                    st.success(f"Successfully saved party: **{p_name.strip().title()}**!")
+                    st.success(f"✅ Successfully saved party: **{p_name.strip().title()}** and cleared form!")
+                    st.session_state.reset_counter += 1
                     st.rerun()
 
         with bulk_party_tab:
-            uploaded_party_file = st.file_uploader("Upload Party Excel/CSV", type=["xlsx", "xls", "csv"], key="party_uploader")
+            uploaded_party_file = st.file_uploader("Upload Party Excel/CSV", type=["xlsx", "xls", "csv"], key=f"party_uploader_{rc}")
             if uploaded_party_file:
                 try:
                     df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file, engine='openpyxl')
                     st.dataframe(df_party_upload.head(), use_container_width=True)
                     if st.button("🚀 Process & Import Parties"):
                         count, errors = bulk_save_parties(df_party_upload)
-                        if count > 0: st.success(f"Successfully imported {count} parties!")
+                        if count > 0:
+                            st.success(f"✅ Successfully imported {count} parties and reset uploader!")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
                         if errors:
                             st.error(f"Encountered {len(errors)} issues:")
                             for err in errors[:5]: st.warning(err)
-                        if count > 0: st.rerun()
                 except Exception as e:
                     st.error(f"Error reading file: {e}")
 
@@ -358,7 +371,7 @@ elif menu_choice == "📋 Party Master & Setup":
                 sub_edit_tab, sub_del_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
                 
                 with sub_edit_tab:
-                    with st.form("edit_party_form"):
+                    with st.form("edit_party_form", clear_on_submit=True):
                         e_name = st.text_input("Party Name", value=party_record["party_name"])
                         e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
                         e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
@@ -376,18 +389,20 @@ elif menu_choice == "📋 Party Master & Setup":
                                     opening_bal=e_opening,
                                     as_on_date=str(party_record.get("as_on_date", date.today().strftime("%Y-%m-%d")))
                                 )
-                                st.success(f"Successfully updated details for **{e_name.strip().title()}**!")
+                                st.success(f"✅ Successfully updated details for **{e_name.strip().title()}**!")
+                                st.session_state.reset_counter += 1
                                 st.rerun()
                             else:
                                 st.error("Party name cannot be empty.")
-                            
+                        
                 with sub_del_tab:
                     st.warning(f"⚠️ Deleting **{selected_party_name}** will also remove all associated purchase invoices and payment records permanently.")
                     confirm_del = st.checkbox(f"I confirm I want to delete {selected_party_name}", key="confirm_delete_chk")
                     if st.button("🗑️ Permanently Delete Party", type="primary", key="btn_del_party"):
                         if confirm_del:
                             delete_party(party_id)
-                            st.success(f"Successfully deleted {selected_party_name}.")
+                            st.success(f"✅ Successfully deleted {selected_party_name}.")
+                            st.session_state.reset_counter += 1
                             st.rerun()
                         else:
                             st.error("Please check the confirmation box to enable deletion.")
@@ -422,7 +437,7 @@ elif menu_choice == "💸 Payments & Bill Clearing":
             else:
                 st.info(f"ℹ️ No specific unpaid invoices found for {pay_party}. Payment will be recorded as a general credit/advance adjustment.")
 
-            with st.form("dash_payment_form"):
+            with st.form("dash_payment_form", clear_on_submit=True):
                 pc1, pc2 = st.columns(2)
                 pay_amount = pc1.number_input("Payment Amount Paid (₹) *", min_value=0.0, step=100.0, key="dash_pay_amt")
                 pay_mode = pc2.selectbox("Payment Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"], key="dash_pay_mode")
@@ -438,7 +453,8 @@ elif menu_choice == "💸 Payments & Bill Clearing":
                             notes=pay_notes.strip(),
                             recorded_by=current_user
                         )
-                        st.success(f"Successfully recorded payment of ₹{pay_amount:,.2f} to **{pay_party}**!")
+                        st.success(f"✅ Successfully recorded payment of ₹{pay_amount:,.2f} to **{pay_party}** and cleared form!")
+                        st.session_state.reset_counter += 1
                         st.rerun()
                     else:
                         st.error("Please enter a valid payment amount greater than 0.")
@@ -462,7 +478,8 @@ elif menu_choice == "💸 Payments & Bill Clearing":
                         try:
                             p_id_extracted = int(selected_pay_to_del.split("|")[0].replace("ID:", "").strip())
                             delete_distributor_payment(p_id_extracted)
-                            st.success(f"Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
+                            st.success(f"✅ Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
+                            st.session_state.reset_counter += 1
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error deleting payment: {e}")
