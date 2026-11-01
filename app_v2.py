@@ -299,6 +299,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                         invoice_ids_to_clear=[],
                                         payment_amount=amt,
                                         payment_mode=extracted.get("payment_mode", "CASH"),
+                                        payment_date=date.today().strftime("%Y-%m-%d"),
                                         notes=extracted.get("notes", "AI Extracted Slip"),
                                         recorded_by=current_user
                                     )
@@ -450,7 +451,7 @@ elif menu_choice == "💸 Payments & Bill Clearing":
                 pay_date = pc3.date_input("Payment Date *", value=date.today(), key="dash_pay_date")
                 
                 pay_notes = st.text_input("Payment Notes / Reference No. (Optional)", key="dash_pay_notes")
-    
+
                 if st.form_submit_button("✅ Confirm & Record Payment"):
                     if pay_amount > 0:
                         record_distributor_payment(
@@ -478,33 +479,6 @@ elif menu_choice == "💸 Payments & Bill Clearing":
                     
                     payment_options = df_payments.apply(
                         lambda r: f"ID: {r['payment_id']} | Party: {r['party_name']} | ₹{r['amount_paid']:,.2f} | Paid Date: {r.get('payment_date', 'N/A')}", 
-                        axis=1
-                    ).tolist()
-                    
-                    selected_pay_to_del = st.selectbox("Select Payment Entry to Remove", payment_options, key="del_pay_sel")
-                    
-                    if st.button("🗑️ Delete Selected Payment", type="primary", key="btn_del_payment"):
-                        try:
-                            p_id_extracted = int(selected_pay_to_del.split("|")[0].replace("ID:", "").strip())
-                            delete_distributor_payment(p_id_extracted)
-                            st.success(f"✅ Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
-                            st.session_state.reset_counter += 1
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error deleting payment: {e}")
-                else:
-                    st.info("No distributor payments recorded yet.")
-
-            with st.expander("📜 View & Manage Payment History (Delete Wrong Entries)"):
-                df_payments = get_distributor_payments_df()
-                if not df_payments.empty:
-                    st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "timestamp", "recorded_by", "notes"]], use_container_width=True, hide_index=True)
-                    
-                    st.markdown("---")
-                    st.markdown("##### 🗑️ Delete Wrongly Recorded Payment")
-                    
-                    payment_options = df_payments.apply(
-                        lambda r: f"ID: {r['payment_id']} | Party: {r['party_name']} | ₹{r['amount_paid']:,.2f} | Date: {r['timestamp']}", 
                         axis=1
                     ).tolist()
                     
