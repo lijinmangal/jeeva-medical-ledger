@@ -10,7 +10,7 @@ from database_v2 import (
     record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
     bulk_save_parties, bulk_save_purchase_invoices,
     extract_invoice_from_image, extract_payment_from_image,
-    safe_float
+    safe_float, safe_int
 )
 
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
@@ -25,7 +25,6 @@ USERS = {
 if "logged_in_user" not in st.session_state:
     st.session_state.logged_in_user = None
 
-# Session state counter to reset file uploaders upon successful submission
 if "reset_counter" not in st.session_state:
     st.session_state.reset_counter = 0
 
@@ -371,12 +370,19 @@ elif menu_choice == "📋 Party Master & Setup":
                 sub_edit_tab, sub_del_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
                 
                 with sub_edit_tab:
-                    with st.form("edit_party_form"):
-                        e_name = st.text_input("Party Name", value=party_record["party_name"])
-                        e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
-                        e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
-                        e_credit = st.number_input("Credit Period (Days)", min_value=0, value=int(party_record.get("credit_period_days", 15)))
-                        e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=float(party_record.get("opening_balance", 0.0)), step=100.0)
+                    with st.form(f"edit_party_form_{party_id}"):
+                        curr_name = str(party_record.get("party_name", ""))
+                        curr_phone = str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else ""
+                        curr_gstin = str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else ""
+                        curr_credit = safe_int(party_record.get("credit_period_days", 15), 15)
+                        curr_opening = safe_float(party_record.get("opening_balance", 0.0), 0.0)
+                        if curr_opening < 0: curr_opening = 0.0
+
+                        e_name = st.text_input("Party Name", value=curr_name, key=f"e_name_{party_id}")
+                        e_phone = st.text_input("Phone Number", value=curr_phone, key=f"e_phone_{party_id}")
+                        e_gstin = st.text_input("GSTIN Number", value=curr_gstin, key=f"e_gstin_{party_id}")
+                        e_credit = st.number_input("Credit Period (Days)", min_value=0, value=curr_credit, key=f"e_credit_{party_id}")
+                        e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=curr_opening, step=100.0, key=f"e_opening_{party_id}")
                         
                         if st.form_submit_button("💾 Save Changes"):
                             if e_name.strip():
