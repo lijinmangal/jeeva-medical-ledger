@@ -46,7 +46,7 @@ current_user = st.session_state.logged_in_user
 user_role = USERS[current_user]["role"]
 
 with st.sidebar:
-    st.markdown(f"### 💊 Jeeva Medical Store")
+    st.markdown("### 💊 Jeeva Medical Store")
     st.markdown(
         f"""
         <div style="background-color: #e2efda; color: #375623; padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 15px;">
@@ -77,8 +77,9 @@ with st.sidebar:
         st.rerun()
 
 rc = st.session_state.reset_counter
+
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
-elif menu_choice == "📊 Dashboard & Market Dues":
+if menu_choice == "📊 Dashboard & Market Dues":
     st.markdown("### 📊 Market Outstandings & Payment Reminders")
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
@@ -227,6 +228,7 @@ elif menu_choice == "📊 Dashboard & Market Dues":
                         st.info("No purchase bills recorded for this party.")
     else:
         st.info("No parties or purchase dues found yet.")
+
 # --- MODULE 2: ADD PURCHASE BILLS & AI PAYMENT SCANNER ---
 elif menu_choice == "📥 Add Purchase Bills & AI Pay":
     st.markdown("### 📥 Add Purchase Bills & AI Finance Scanner")
