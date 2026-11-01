@@ -556,7 +556,7 @@ elif menu_choice == "💾 Data Exports (Excel)":
             df_i = get_purchase_invoices_df()
             if not df_i.empty:
                 output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl__) as writer:
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_i.to_excel(writer, index=False, sheet_name='Invoices')
                 st.download_button("📥 Download Invoices Excel", output.getvalue(), file_name="purchase_invoices.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
