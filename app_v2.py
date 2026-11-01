@@ -79,8 +79,8 @@ with st.sidebar:
 rc = st.session_state.reset_counter
 
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
-if menu_choice == "📊 Dashboard & Market Dues":
-    st.markdown("### 📊 Market Outstandings & Party Breakdown")
+elif menu_choice == "📊 Dashboard & Market Dues":
+    st.markdown("### 📊 Market Outstandings & Payment Reminders")
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
 
@@ -89,18 +89,79 @@ if menu_choice == "📊 Dashboard & Market Dues":
         st.metric("Total Market Dues Payable", f"₹{total_market_dues:,.2f}")
         st.divider()
 
+        # --- MANAGER'S URGENCY REMINDER PANEL ---
+        st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
+        if not df_invoices.empty:
+            unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
+            if not unpaid_invoices.empty:
+                today = date.today()
+                
+                # Calculate exact day differences
+                def get_days_diff(due_date_str):
+                    due_dt = datetime.strptime(due_date_str, "%Y-%m-%d").date()
+                    return (due_dt - today).days
+
+                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(get_days_diff)
+
+                # Filter categories
+                due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0]
+                due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
+                due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
+                due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
+
+                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                
+                with col_r1:
+                    st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum():,.2f}")
+                with col_r2:
+                    st.warning(f"🟠 **Due Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum():,.2f}")
+                with col_r3:
+                    st.info(f"🟡 **Due Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum():,.2f}")
+                with col_r4:
+                    st.success(f"🟢 **Next 7 Days ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum():,.2f}")
+
+                # Collapsible detailed reminder table for quick manager review
+                with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
+                    reminder_tab_od, reminder_tab_tod, reminder_tab_tom, reminder_tab_fut = st.tabs(["🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
+                    
+                    with reminder_tab_od:
+                        if not due_overdue.empty:
+                            st.dataframe(due_overdue[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.success("No overdue bills!")
+                            
+                    with reminder_tab_tod:
+                        if not due_today.empty:
+                            st.dataframe(due_today[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No bills due today.")
+                            
+                    with reminder_tab_tom:
+                        if not due_tomorrow.empty:
+                            st.dataframe(due_tomorrow[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No bills due tomorrow.")
+                            
+                    with reminder_tab_fut:
+                        if not due_upcoming.empty:
+                            st.dataframe(due_upcoming[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No upcoming bills in the next 7 days.")
+            else:
+                st.success("🎉 All purchase bills are fully paid!")
+        
+        st.divider()
+
         # Excel Summary Download Button for Dashboard
         col_exp1, col_exp2 = st.columns([2, 3])
         with col_exp1:
             output_summary = io.BytesIO()
             with pd.ExcelWriter(output_summary, engine='openpyxl') as writer:
-                # Prepare summary export dataframe
                 summary_export_df = df_dues[[
                     "party_name", "opening_balance", "opening_as_on", 
                     "total_bills", "total_payments", "total_due_amount", "Payment_Urgency"
                 ]].copy()
                 
-                # Append Grand Total Row
                 total_row = pd.DataFrame([{
                     "party_name": "GRAND TOTAL",
                     "opening_balance": df_dues["opening_balance"].sum(),
@@ -156,8 +217,9 @@ if menu_choice == "📊 Dashboard & Market Dues":
                             due_dt = datetime.strptime(row["due_date"], "%Y-%m-%d").date()
                             days_left = (due_dt - today).days
                             if days_left < 0: return f"🔴 OVERDUE ({row['due_date']})"
-                            elif days_left <= 3: return f"🟡 Due Soon ({row['due_date']}, {days_left}d)"
-                            else: return f"🟢 Safe ({row['due_date']}, {days_left}d)"
+                            elif days_left == 0: return f"🟠 DUE TODAY ({row['due_date']})"
+                            elif days_left == 1: return f"🟡 DUE TOMORROW ({row['due_date']})"
+                            else: return f"🟢 Safe ({row['due_date']}, {days_left}d left)"
 
                         party_bills["Bill_Status_Urgency"] = party_bills.apply(calc_bill_urgency, axis=1)
                         st.dataframe(
@@ -169,7 +231,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
                         st.info("No purchase bills recorded for this party.")
     else:
         st.info("No parties or purchase dues found yet.")
-
 # --- MODULE 2: ADD PURCHASE BILLS & AI PAYMENT SCANNER ---
 elif menu_choice == "📥 Add Purchase Bills & AI Pay":
     st.markdown("### 📥 Add Purchase Bills & AI Finance Scanner")
