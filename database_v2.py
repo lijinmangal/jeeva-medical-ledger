@@ -270,20 +270,4 @@ def get_distributor_payments_df() -> pd.DataFrame:
     try:
         df = pd.read_sql_query("""
             SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
-            FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
-            ORDER BY dp.payment_id DESC
-        """, conn)
-    except Exception:
-        df = pd.DataFrame()
-    conn.close()
-    return df
-
-def get_party_dues_summary() -> pd.DataFrame:
-    parties_df = get_parties_df()
-    if parties_df.empty: return pd.DataFrame()
-    invoices_df = get_purchase_invoices_df()
-    payments_df = get_distributor_payments_df()
-    summary_list = []
-    today = datetime.now().date()
-
-    for _, party in parties_df.iterrows():
+            FROM distributor_payments dp JOIN parties p ON dp
