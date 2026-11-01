@@ -79,7 +79,7 @@ with st.sidebar:
 rc = st.session_state.reset_counter
 
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
-if menu_choice == "📊 Dashboard & Market Dues":
+elif menu_choice == "📊 Dashboard & Market Dues":
     st.markdown("### 📊 Market Outstandings & Party Breakdown")
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
@@ -89,11 +89,44 @@ if menu_choice == "📊 Dashboard & Market Dues":
         st.metric("Total Market Dues Payable", f"₹{total_market_dues:,.2f}")
         st.divider()
 
+        # Excel Summary Download Button for Dashboard
+        col_exp1, col_exp2 = st.columns([2, 3])
+        with col_exp1:
+            output_summary = io.BytesIO()
+            with pd.ExcelWriter(output_summary, engine='openpyxl') as writer:
+                # Prepare summary export dataframe
+                summary_export_df = df_dues[[
+                    "party_name", "opening_balance", "opening_as_on", 
+                    "total_bills", "total_payments", "total_due_amount", "Payment_Urgency"
+                ]].copy()
+                
+                # Append Grand Total Row
+                total_row = pd.DataFrame([{
+                    "party_name": "GRAND TOTAL",
+                    "opening_balance": df_dues["opening_balance"].sum(),
+                    "opening_as_on": "-",
+                    "total_bills": df_dues["total_bills"].sum(),
+                    "total_payments": df_dues["total_payments"].sum(),
+                    "total_due_amount": df_dues["total_due_amount"].sum(),
+                    "Payment_Urgency": "-"
+                }])
+                summary_export_df = pd.concat([summary_export_df, total_row], ignore_index=True)
+                summary_export_df.to_excel(writer, index=False, sheet_name='Party Ledger Summary')
+                
+            st.download_button(
+                "📥 Download Summary Excel (Opening, Bills, Paid, Dues)", 
+                output_summary.getvalue(), 
+                file_name="party_ledger_summary_report.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
         search_party = st.text_input("🔍 Search Party Name:", key="search_party_dash")
         filtered_dues = df_dues
         if search_party:
             filtered_dues = df_dues[df_dues["party_name"].str.contains(search_party, case=False, na=False)]
 
+        st.markdown("---")
         for _, party_row in filtered_dues.iterrows():
             p_name = party_row["party_name"]
             total_due = party_row["total_due_amount"]
@@ -107,26 +140,33 @@ if menu_choice == "📊 Dashboard & Market Dues":
             
             with st.expander(expander_label):
                 c_s1, c_s2, c_s3 = st.columns(3)
-                c_s1.markdown(f"🔹 **Opening:** ₹{opening_bal:,.2f} *(As on {opening_as_on})*")
+                c_s1.markdown(f"🔹 **Opening Balance:** ₹{opening_bal:,.2f} *(As on {opening_as_on})*")
                 c_s2.markdown(f"📦 **Total Bills:** ₹{total_bills:,.2f}")
                 c_s3.markdown(f"💸 **Total Paid:** ₹{total_pays:,.2f}")
                 
+                st.markdown("---")
                 if not df_invoices.empty:
-                    party_bills = df_invoices[(df_invoices["party_name"] == p_name) & (df_invoices["status"] == "UNPAID")]
+                    party_bills = df_invoices[df_invoices["party_name"] == p_name]
                     if not party_bills.empty:
-                        st.markdown("#### 📦 Unpaid Purchase Invoices:")
+                        st.markdown("#### 📋 All Bills & Due Dates for this Party:")
                         today = date.today()
                         def calc_bill_urgency(row):
+                            if row["status"] == "PAID":
+                                return "✅ PAID"
                             due_dt = datetime.strptime(row["due_date"], "%Y-%m-%d").date()
                             days_left = (due_dt - today).days
                             if days_left < 0: return f"🔴 OVERDUE ({row['due_date']})"
                             elif days_left <= 3: return f"🟡 Due Soon ({row['due_date']}, {days_left}d)"
                             else: return f"🟢 Safe ({row['due_date']}, {days_left}d)"
 
-                        party_bills["Bill_Urgency"] = party_bills.apply(calc_bill_urgency, axis=1)
-                        st.dataframe(party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount", "Bill_Urgency"]], use_container_width=True, hide_index=True)
+                        party_bills["Bill_Status_Urgency"] = party_bills.apply(calc_bill_urgency, axis=1)
+                        st.dataframe(
+                            party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount", "status", "Bill_Status_Urgency"]], 
+                            use_container_width=True, 
+                            hide_index=True
+                        )
                     else:
-                        st.info("No unpaid purchase bills recorded.")
+                        st.info("No purchase bills recorded for this party.")
     else:
         st.info("No parties or purchase dues found yet.")
 
