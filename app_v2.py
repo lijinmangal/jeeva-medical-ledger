@@ -79,7 +79,7 @@ with st.sidebar:
 rc = st.session_state.reset_counter
 
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
-elif menu_choice == "📊 Dashboard & Market Dues":
+if menu_choice == "📊 Dashboard & Market Dues":
     st.markdown("### 📊 Market Outstandings & Party Breakdown")
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
