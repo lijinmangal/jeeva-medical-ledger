@@ -77,7 +77,6 @@ with st.sidebar:
         st.rerun()
 
 rc = st.session_state.reset_counter
-
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
 elif menu_choice == "📊 Dashboard & Market Dues":
     st.markdown("### 📊 Market Outstandings & Payment Reminders")
@@ -96,14 +95,12 @@ elif menu_choice == "📊 Dashboard & Market Dues":
             if not unpaid_invoices.empty:
                 today = date.today()
                 
-                # Calculate exact day differences
                 def get_days_diff(due_date_str):
                     due_dt = datetime.strptime(due_date_str, "%Y-%m-%d").date()
                     return (due_dt - today).days
 
                 unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(get_days_diff)
 
-                # Filter categories
                 due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0]
                 due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
                 due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
@@ -120,7 +117,6 @@ elif menu_choice == "📊 Dashboard & Market Dues":
                 with col_r4:
                     st.success(f"🟢 **Next 7 Days ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum():,.2f}")
 
-                # Collapsible detailed reminder table for quick manager review
                 with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
                     reminder_tab_od, reminder_tab_tod, reminder_tab_tom, reminder_tab_fut = st.tabs(["🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
                     
