@@ -10,14 +10,7 @@ from database_v2 import (
     record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
     bulk_save_parties, bulk_save_purchase_invoices,
     extract_invoice_from_image, extract_payment_from_image,
-    safe_float  # <--- Make sure this is included here
-)
-from database_v2 import (
-    init_clean_database, get_parties_df, save_party, update_party, delete_party,
-    save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
-    record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
-    bulk_save_parties, bulk_save_purchase_invoices,
-    extract_invoice_from_image, extract_payment_from_image
+    safe_float
 )
 
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
@@ -29,9 +22,6 @@ USERS = {
     "accounts": {"pin": "2222", "role": "Accountant"}
 }
 
-# ==========================================
-# 1. LOGIN SCREEN
-# ==========================================
 if "logged_in_user" not in st.session_state:
     st.session_state.logged_in_user = None
 
@@ -49,9 +39,6 @@ if not st.session_state.logged_in_user:
                 st.error("Invalid PIN")
     st.stop()
 
-# ==========================================
-# 2. LEFT-SIDE NAVIGATION RIBBON & HEADER
-# ==========================================
 current_user = st.session_state.logged_in_user
 user_role = USERS[current_user]["role"]
 
@@ -85,10 +72,6 @@ with st.sidebar:
     if st.button("🚪 Logout", use_container_width=True):
         st.session_state.logged_in_user = None
         st.rerun()
-
-# ==========================================
-# 3. MAIN CONTENT AREA BASED ON SIDEBAR SELECTION
-# ==========================================
 
 # --- MODULE 1: DASHBOARD & MARKET DUES ---
 if menu_choice == "📊 Dashboard & Market Dues":
@@ -197,13 +180,16 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                         if file_name.endswith('.csv'):
                             df_inv_upload = pd.read_csv(uploaded_inv_file)
                         elif file_name.endswith('.xls'):
-                            df_inv_upload = pd.read_excel(uploaded_inv_file, engine='xlrd')
+                            try:
+                                df_inv_upload = pd.read_excel(uploaded_inv_file, engine='xlrd')
+                            except ImportError:
+                                st.error("⚠️ This is an older `.xls` file. Please save it as a modern `.xlsx` or `.csv` file, or install `xlrd` (`pip install xlrd`).")
+                                st.stop()
                         else:
                             df_inv_upload = pd.read_excel(uploaded_inv_file, engine='openpyxl')
                             
                         df_inv_upload.columns = [str(c).strip().lower().replace(" ", "_") for c in df_inv_upload.columns]
                         
-                        # Fetch registered parties for validation
                         df_master_parties = get_parties_df()
                         existing_parties = set(df_master_parties["party_name"].str.strip().str.title().tolist()) if not df_master_parties.empty else set()
                         
@@ -232,7 +218,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                 return "background-color: #ffcccc; color: #c00000; font-weight: bold;"
                                 
                         st.markdown("### 📋 Step 1: Review Upload Preview & Party Match")
-                        st.dataframe(df_inv_upload.style.applymap(style_status, subset=['Validation_Status']), use_container_width=True, hide_index=True)
+                        st.dataframe(df_inv_upload.style.map(style_status, subset=['Validation_Status']), use_container_width=True, hide_index=True)
                         
                         invalid_count = (df_inv_upload["Validation_Status"] != "✅ Valid").sum()
                         
@@ -249,7 +235,7 @@ elif menu_choice == "📥 Add Purchase Bills & AI Pay":
                                     for err in errors:
                                         st.warning(err)
                     except Exception as e:
-                        st.error(f"Error reading file: {e}. (Note: If using an old .xls file, ensure `xlrd` is installed in your environment).")
+                        st.error(f"Error reading file: {e}")
 
             with bill_tab_manual:
                 st.markdown("Manually enter purchase bill details.")
@@ -350,7 +336,7 @@ elif menu_choice == "📋 Party Master & Setup":
             uploaded_party_file = st.file_uploader("Upload Party Excel/CSV", type=["xlsx", "xls", "csv"], key="party_uploader")
             if uploaded_party_file:
                 try:
-                    df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file)
+                    df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file, engine='openpyxl')
                     st.dataframe(df_party_upload.head(), use_container_width=True)
                     if st.button("🚀 Process & Import Parties"):
                         count, errors = bulk_save_parties(df_party_upload)
