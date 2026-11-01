@@ -51,6 +51,7 @@ def init_clean_database():
             party_id INTEGER,
             amount_paid REAL NOT NULL,
             payment_mode TEXT,
+            payment_date TEXT,
             notes TEXT,
             recorded_by TEXT,
             timestamp TEXT,
@@ -244,13 +245,13 @@ def get_purchase_invoices_df() -> pd.DataFrame:
     conn.close()
     return df
 
-def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
+def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, payment_date, notes, recorded_by):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, notes, recorded_by, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (party_id, payment_amount, payment_mode, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (party_id, payment_amount, payment_mode, payment_date, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     
     if invoice_ids_to_clear:
         placeholders = ','.join(['?'] * len(invoice_ids_to_clear))
@@ -269,11 +270,12 @@ def get_distributor_payments_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     try:
         df = pd.read_sql_query("""
-            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.notes, dp.recorded_by, dp.timestamp
+            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.payment_date, dp.notes, dp.recorded_by, dp.timestamp
             FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
             ORDER BY dp.payment_id DESC
         """, conn)
     except Exception:
+        # Fallback if table needs migration or columns differ
         df = pd.DataFrame()
     conn.close()
     return df
