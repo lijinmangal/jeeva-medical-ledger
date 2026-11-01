@@ -260,11 +260,19 @@ def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, p
     conn.close()
 
 def delete_distributor_payment(payment_id):
+    """Deletes a payment record by its unique payment_id and restores outstandings."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
-    conn.commit()
-    conn.close()
+    try:
+        # Optional: If notes contain cleared invoice references, you can parse them, 
+        # or simply delete the payment entry which instantly restores the net outstanding calculation.
+        cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def get_distributor_payments_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
