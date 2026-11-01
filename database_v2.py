@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import os
 import streamlit as st
 
-# Safe AI Imports
 try:
     from google import genai
     from PIL import Image
@@ -47,30 +46,6 @@ def init_clean_database():
     """)
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS financial_openings (
-            opening_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_category TEXT NOT NULL,
-            description TEXT,
-            amount REAL NOT NULL,
-            entry_nature TEXT NOT NULL,
-            created_at TEXT
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS outstanding_adjustments (
-            adjustment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            party_id INTEGER,
-            previous_balance REAL,
-            new_balance REAL,
-            reason TEXT NOT NULL,
-            adjusted_by TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            FOREIGN KEY (party_id) REFERENCES parties (party_id)
-        )
-    """)
-
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS distributor_payments (
             payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
             party_id INTEGER,
@@ -103,17 +78,13 @@ def safe_float(val, default=0.0):
         return default
 
 def parse_date(val):
-    """Safely parses dates from various spreadsheet formats into YYYY-MM-DD."""
     if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
         return datetime.now().strftime("%Y-%m-%d")
-    
     if isinstance(val, (datetime, pd.Timestamp)):
         return val.strftime("%Y-%m-%d")
-        
     val_str = str(val).strip()
     if len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
         return val_str[:10]
-        
     formats = ["%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d-%b-%y"]
     for fmt in formats:
         try:
@@ -123,7 +94,6 @@ def parse_date(val):
             continue
     return datetime.now().strftime("%Y-%m-%d")
 
-# --- PARTY HELPERS ---
 def get_parties_df() -> pd.DataFrame:
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM parties ORDER BY party_name ASC", conn)
@@ -204,7 +174,6 @@ def bulk_save_parties(df_parties):
     conn.close()
     return success_count, errors
 
-# --- INVOICE HELPERS ---
 def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
     inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
     due_dt = inv_dt + timedelta(days=credit_days)
@@ -270,7 +239,6 @@ def get_purchase_invoices_df() -> pd.DataFrame:
     conn.close()
     return df
 
-# --- PAYMENTS & DUES SUMMARY ---
 def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, notes, recorded_by):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -359,7 +327,6 @@ def get_party_dues_summary() -> pd.DataFrame:
         })
     return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
 
-# --- GEMINI AI VISION SCANNERS ---
 def extract_invoice_from_image(image_file):
     if not AI_AVAILABLE:
         return {"error": "google-genai package not installed."}
