@@ -370,8 +370,8 @@ elif menu_choice == "📋 Party Master & Setup":
                 
                 sub_edit_tab, sub_del_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
                 
-               with sub_edit_tab:
-                    with st.form("edit_party_form"):  # Removed clear_on_submit=True here
+                with sub_edit_tab:
+                    with st.form("edit_party_form"):
                         e_name = st.text_input("Party Name", value=party_record["party_name"])
                         e_phone = st.text_input("Phone Number", value=str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else "")
                         e_gstin = st.text_input("GSTIN Number", value=str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else "")
