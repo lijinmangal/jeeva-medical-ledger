@@ -18,7 +18,13 @@ def get_engine():
     if not SUPABASE_URL:
         st.error("⚠️ SUPABASE_DB_URL is missing from Streamlit secrets or environment variables.")
         st.stop()
-    return create_engine(SUPABASE_URL)
+    
+    # Explicitly prefix with postgresql+psycopg2:// so SQLAlchemy uses psycopg2
+    db_url = SUPABASE_URL
+    if db_url.startswith("postgresql://") and "+psycopg2" not in db_url:
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        
+    return create_engine(db_url)
 
 def init_clean_database():
     """Initializes PostgreSQL tables in Supabase if they don't already exist."""
