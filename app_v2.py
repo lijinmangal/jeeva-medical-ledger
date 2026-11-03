@@ -15,7 +15,13 @@ from database_v2 import (
 
 st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
 init_clean_database()
-
+# Quick connection & table verification test
+try:
+    df_test = get_parties_df()
+    st.sidebar.success("✅ Supabase Cloud Connected!")
+except Exception as e:
+    st.sidebar.error(f"❌ DB Connection Failed: {e}")
+    
 USERS = {
     "admin": {"pin": "1234", "role": "Owner"},
     "staff1": {"pin": "1111", "role": "Counter Staff"},
