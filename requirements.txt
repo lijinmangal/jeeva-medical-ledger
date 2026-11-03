@@ -8,4 +8,5 @@ python-calamine
 xlrd
 sqlalchemy
 psycopg2-binary
+psycopg
 
