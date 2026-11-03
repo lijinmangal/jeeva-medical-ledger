@@ -13,15 +13,9 @@ from database_v2 import (
     safe_float, safe_int
 )
 
-st.set_page_config(page_title="Jeeva Medical Store V2", page_icon="💊", layout="wide")
+st.set_page_config(page_title="Jeeva Medical Store V2 (Cloud)", page_icon="💊", layout="wide")
 init_clean_database()
-# Quick connection & table verification test
-try:
-    df_test = get_parties_df()
-    st.sidebar.success("✅ Supabase Cloud Connected!")
-except Exception as e:
-    st.sidebar.error(f"❌ DB Connection Failed: {e}")
-    
+
 USERS = {
     "admin": {"pin": "1234", "role": "Owner"},
     "staff1": {"pin": "1111", "role": "Counter Staff"},
@@ -603,10 +597,11 @@ elif menu_choice == "💸 Payments & Bill Clearing":
         else:
             st.warning("Please register at least one purchase party first.")
 
-# --- MODULE 5: DATA EXPORTS ---
+# --- MODULE 5: DATA EXPORTS & LEGACY BACKUP ---
 elif menu_choice == "💾 Data Exports (Excel)":
-    st.markdown("### 💾 Download System Data as Excel")
+    st.markdown("### 💾 Download System Data & Legacy Backup")
     with st.container(border=True):
+        st.markdown("#### 📥 Individual Table Downloads")
         col_dl1, col_dl2, col_dl3 = st.columns(3)
         
         with col_dl1:
@@ -632,3 +627,30 @@ elif menu_choice == "💾 Data Exports (Excel)":
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_pay.to_excel(writer, index=False, sheet_name='Payments')
                 st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
+        st.divider()
+        st.markdown("#### 📦 Master Legacy Backup (All Tables in One Excel Snapshot)")
+        st.markdown("Download a complete multi-sheet Excel file containing your entire Supabase database for offline archiving.")
+        
+        if st.button("⚙️ Generate Master Legacy Backup"):
+            try:
+                master_output = io.BytesIO()
+                with pd.ExcelWriter(master_output, engine='openpyxl') as writer:
+                    df_p = get_parties_df()
+                    df_i = get_purchase_invoices_df()
+                    df_pay = get_distributor_payments_df()
+                    
+                    if not df_p.empty: df_p.to_excel(writer, index=False, sheet_name='Parties')
+                    if not df_i.empty: df_i.to_excel(writer, index=False, sheet_name='Invoices')
+                    if not df_pay.empty: df_pay.to_excel(writer, index=False, sheet_name='Payments')
+                
+                st.download_button(
+                    "📥 Download Master Legacy Backup File (.xlsx)",
+                    master_output.getvalue(),
+                    file_name=f"jeeva_medical_ledger_legacy_backup_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+                st.success("✅ Master legacy backup generated successfully!")
+            except Exception as e:
+                st.error(f"Error generating backup: {e}")
