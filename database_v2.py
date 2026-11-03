@@ -1,406 +1,675 @@
-# database_v2.py
-import pandas as pd
-from datetime import datetime, timedelta
-import os
+# app_v2.py
+from datetime import datetime, date
 import streamlit as st
-from sqlalchemy import create_engine, text
+import pandas as pd
+import io
 
-try:
-    from google import genai
-    from PIL import Image
-    AI_AVAILABLE = True
-except ImportError:
-    AI_AVAILABLE = False
+from database_v2 import (
+    init_clean_database, test_database_connection, get_parties_df, save_party, update_party, delete_party,
+    save_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
+    record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
+    bulk_save_parties, bulk_save_purchase_invoices,
+    extract_invoice_from_image, extract_payment_from_image,
+    safe_float, safe_int
+)
 
-SUPABASE_URL = os.environ.get("SUPABASE_DB_URL") or st.secrets.get("SUPABASE_DB_URL", "")
+st.set_page_config(page_title="Jeeva Medical Store V2 (Cloud)", page_icon="💊", layout="wide")
 
-def get_engine():
-    if not SUPABASE_URL:
-        st.error("⚠️ SUPABASE_DB_URL is missing from Streamlit secrets or environment variables.")
+# --- SAFE CONNECTION & TABLE INITIALIZATION CHECK ---
+with st.spinner("Connecting to Supabase Cloud Database..."):
+    conn_ok, conn_msg = test_database_connection()
+    if not conn_ok:
+        st.error(f"❌ **Database Connection Error:** {conn_msg}")
+        st.markdown("""
+        ### Troubleshooting Steps:
+        1. **Check Password Special Characters:** If your database password contains special characters like `@`, ensure they are URL-encoded (e.g., `@` becomes `%40`).
+        2. **Check Supabase Status:** Ensure your Supabase project is active and not paused due to inactivity.
+        3. **Verify Secrets:** Check your Streamlit Cloud Secrets settings to ensure `SUPABASE_DB_URL` is configured correctly.
+        """)
         st.stop()
-    
-    # Explicitly prefix with postgresql+psycopg2:// so SQLAlchemy uses psycopg2
-    db_url = SUPABASE_URL
-    if db_url.startswith("postgresql://") and "+psycopg2" not in db_url:
-        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        
-    return create_engine(db_url)
-
-def init_clean_database():
-    """Initializes PostgreSQL tables in Supabase if they don't already exist."""
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS parties (
-                party_id SERIAL PRIMARY KEY,
-                party_name TEXT UNIQUE NOT NULL,
-                phone TEXT,
-                gstin TEXT,
-                credit_period_days INTEGER DEFAULT 15,
-                opening_balance REAL DEFAULT 0.0,
-                as_on_date TEXT,
-                created_at TEXT
-            )
-        """))
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS purchase_invoices (
-                invoice_id SERIAL PRIMARY KEY,
-                party_id INTEGER REFERENCES parties(party_id) ON DELETE CASCADE,
-                invoice_number TEXT NOT NULL,
-                invoice_date TEXT NOT NULL,
-                due_date TEXT NOT NULL,
-                bill_amount REAL NOT NULL,
-                status TEXT DEFAULT 'UNPAID',
-                created_at TEXT
-            )
-        """))
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS distributor_payments (
-                payment_id SERIAL PRIMARY KEY,
-                party_id INTEGER REFERENCES parties(party_id) ON DELETE CASCADE,
-                amount_paid REAL NOT NULL,
-                payment_mode TEXT,
-                payment_date TEXT,
-                notes TEXT,
-                recorded_by TEXT,
-                timestamp TEXT
-            )
-        """))
-
-def safe_int(val, default=15):
-    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
-        return default
-    try:
-        return int(float(val))
-    except Exception:
-        return default
-
-def safe_float(val, default=0.0):
-    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
-        return default
-    try:
-        return float(val)
-    except Exception:
-        return default
-
-def parse_date(val):
-    if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
-        return datetime.now().strftime("%Y-%m-%d")
-    if isinstance(val, (datetime, pd.Timestamp)):
-        return val.strftime("%Y-%m-%d")
-    val_str = str(val).strip()
-    if len(val_str) >= 10 and val_str[4] == '-' and val_str[7] == '-':
-        return val_str[:10]
-    formats = ["%d-%m-%y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d-%b-%y"]
-    for fmt in formats:
+    else:
         try:
-            dt = datetime.strptime(val_str, fmt)
-            return dt.strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return datetime.now().strftime("%Y-%m-%d")
+            init_clean_database()
+        except Exception as e:
+            st.error(f"❌ Failed to initialize database tables: {e}")
+            st.stop()
 
-def get_parties_df() -> pd.DataFrame:
-    engine = get_engine()
-    try:
-        df = pd.read_sql("SELECT * FROM parties ORDER BY party_name ASC", engine)
-    except Exception:
-        df = pd.DataFrame()
-    return df
+USERS = {
+    "admin": {"pin": "1234", "role": "Owner"},
+    "staff1": {"pin": "1111", "role": "Counter Staff"},
+    "accounts": {"pin": "2222", "role": "Accountant"}
+}
 
-def save_party(name, phone, gstin, credit_days, opening_bal, as_on_date, created_date):
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
-            VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_date)
-            ON CONFLICT (party_name) DO UPDATE SET
-            phone = EXCLUDED.phone,
-            gstin = EXCLUDED.gstin,
-            credit_period_days = EXCLUDED.credit_period_days,
-            opening_balance = EXCLUDED.opening_balance,
-            as_on_date = EXCLUDED.as_on_date
-        """), {
-            "name": name, "phone": phone, "gstin": gstin, 
-            "credit_days": credit_days, "opening_bal": opening_bal, 
-            "as_on_date": as_on_date, "created_date": created_date
-        })
+if "logged_in_user" not in st.session_state:
+    st.session_state.logged_in_user = None
 
-def update_party(party_id, name, phone, gstin, credit_days, opening_bal, as_on_date):
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            UPDATE parties 
-            SET party_name = :name, phone = :phone, gstin = :gstin, 
-                credit_period_days = :credit_days, opening_balance = :opening_bal, as_on_date = :as_on_date
-            WHERE party_id = :party_id
-        """), {
-            "name": name, "phone": phone, "gstin": gstin, 
-            "credit_days": credit_days, "opening_bal": opening_bal, 
-            "as_on_date": as_on_date, "party_id": party_id
-        })
+if "reset_counter" not in st.session_state:
+    st.session_state.reset_counter = 0
 
-def delete_party(party_id):
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM purchase_invoices WHERE party_id = :party_id"), {"party_id": party_id})
-        conn.execute(text("DELETE FROM distributor_payments WHERE party_id = :party_id"), {"party_id": party_id})
-        conn.execute(text("DELETE FROM parties WHERE party_id = :party_id"), {"party_id": party_id})
+if not st.session_state.logged_in_user:
+    st.title("🔐 Jeeva Medical Store - Secure Portal")
+    col1, col2 = st.columns(2)
+    with col1:
+        username = st.selectbox("Select User", list(USERS.keys()))
+        pin = st.text_input("Enter PIN (Default admin: 1234)", type="password")
+        if st.button("Login", type="primary"):
+            if USERS[username]["pin"] == pin:
+                st.session_state.logged_in_user = username
+                st.rerun()
+            else:
+                st.error("Invalid PIN")
+    st.stop()
 
-def bulk_save_parties(df_parties):
-    engine = get_engine()
-    df_parties.columns = [str(c).strip().lower().replace(" ", "_") for c in df_parties.columns]
-    success_count = 0
-    errors = []
+current_user = st.session_state.logged_in_user
+user_role = USERS[current_user]["role"]
+
+with st.sidebar:
+    st.markdown("### 💊 Jeeva Medical Store")
+    st.markdown(
+        f"""
+        <div style="background-color: #e2efda; color: #375623; padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 15px;">
+            👤 {current_user.upper()} ({user_role})
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    st.success("✅ Supabase Cloud Connected")
     
-    with engine.begin() as conn:
-        for idx, row in df_parties.iterrows():
-            try:
-                name = str(row.get('party_name', '')).strip().title()
-                if not name or name == "Nan" or pd.isna(row.get('party_name')):
-                    continue
-                phone = str(row.get('phone', '')).strip()
-                if phone == "nan" or pd.isna(row.get('phone')): phone = ""
-                gstin = str(row.get('gstin', '')).strip().upper()
-                if gstin == "NAN" or pd.isna(row.get('gstin')): gstin = ""
-                
-                credit_days = safe_int(row.get('credit_period_days'), 15)
-                opening_bal = safe_float(row.get('opening_balance'), 0.0)
-                as_on_date = parse_date(row.get('as_on_date'))
-                
-                conn.execute(text("""
-                    INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
-                    VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_at)
-                    ON CONFLICT (party_name) DO UPDATE SET
-                    phone = EXCLUDED.phone,
-                    gstin = EXCLUDED.gstin,
-                    credit_period_days = EXCLUDED.credit_period_days,
-                    opening_balance = EXCLUDED.opening_balance,
-                    as_on_date = EXCLUDED.as_on_date
-                """), {
-                    "name": name, "phone": phone, "gstin": gstin, "credit_days": credit_days,
-                    "opening_bal": opening_bal, "as_on_date": as_on_date, 
-                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-                success_count += 1
-            except Exception as e:
-                errors.append(f"Row {idx+2}: {e}")
-    return success_count, errors
-
-def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
-    inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
-    due_dt = inv_dt + timedelta(days=credit_days)
-    due_date_str = due_dt.strftime("%Y-%m-%d")
-
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
-            VALUES (:party_id, :inv_no, :inv_date, :due_date, :amount, 'UNPAID', :created_date)
-        """), {
-            "party_id": party_id, "inv_no": inv_no, "inv_date": inv_date,
-            "due_date": due_date_str, "amount": amount, "created_date": created_date
-        })
-
-def bulk_save_purchase_invoices(df_invoices):
-    engine = get_engine()
-    df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
-    success_count = 0
-    errors = []
+    st.markdown("---")
+    st.markdown("### 📌 Navigation Ribbon")
     
-    with engine.begin() as conn:
-        for idx, row in df_invoices.iterrows():
-            try:
-                party_name = str(row.get('party_name', '')).strip().title()
-                inv_no = str(row.get('invoice_number', '')).strip()
-                inv_date = parse_date(row.get('invoice_date'))
-                amount = safe_float(row.get('bill_amount'), 0.0)
+    menu_choice = st.radio(
+        "Select Module",
+        [
+            "📊 Dashboard & Market Dues",
+            "📥 Add Purchase Bills & AI Pay",
+            "📋 Party Master & Setup",
+            "💸 Payments & Bill Clearing",
+            "💾 Data Exports (Excel)"
+        ],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state.logged_in_user = None
+        st.rerun()
+
+rc = st.session_state.reset_counter
+
+# --- MODULE 1: DASHBOARD & MARKET DUES ---
+if menu_choice == "📊 Dashboard & Market Dues":
+    st.markdown("### 📊 Market Outstandings & Payment Reminders")
+    df_dues = get_party_dues_summary()
+    df_invoices = get_purchase_invoices_df()
+
+    if not df_dues.empty:
+        total_market_dues = df_dues["total_due_amount"].sum()
+        st.metric("Total Market Dues Payable", f"₹{total_market_dues:,.2f}")
+        st.divider()
+
+        # --- MANAGER'S URGENCY REMINDER PANEL ---
+        st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
+        if not df_invoices.empty:
+            unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
+            if not unpaid_invoices.empty:
+                today = date.today()
                 
-                if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
-                    continue
+                def get_days_diff(due_date_str):
+                    due_dt = datetime.strptime(due_date_str, "%Y-%m-%d").date()
+                    return (due_dt - today).days
+
+                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(get_days_diff)
+
+                due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0]
+                due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
+                due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
+                due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
+
+                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
                 
-                res = conn.execute(text("SELECT party_id, credit_period_days FROM parties WHERE party_name = :p_name"), {"p_name": party_name}).fetchone()
-                
-                if res:
-                    p_id, credit_days = res[0], res[1]
-                    inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
-                    due_dt = inv_dt + timedelta(days=int(credit_days))
-                    due_date_str = due_dt.strftime("%Y-%m-%d")
+                with col_r1:
+                    st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum():,.2f}")
+                with col_r2:
+                    st.warning(f"🟠 **Due Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum():,.2f}")
+                with col_r3:
+                    st.info(f"🟡 **Due Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum():,.2f}")
+                with col_r4:
+                    st.success(f"🟢 **Next 7 Days ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum():,.2f}")
+
+                with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
+                    reminder_tab_od, reminder_tab_tod, reminder_tab_tom, reminder_tab_fut = st.tabs(["🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
                     
-                    conn.execute(text("""
-                        INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
-                        VALUES (:p_id, :inv_no, :inv_date, :due_date, :amount, 'UNPAID', :created_at)
-                    """), {
-                        "p_id": p_id, "inv_no": inv_no, "inv_date": inv_date,
-                        "due_date": due_date_str, "amount": amount,
-                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                    success_count += 1
-                else:
-                    errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
-            except Exception as e:
-                errors.append(f"Row {idx+2}: {e}")
-    return success_count, errors
-
-def get_purchase_invoices_df() -> pd.DataFrame:
-    engine = get_engine()
-    query = """
-        SELECT i.invoice_id, p.party_id, p.party_name, i.invoice_number, i.invoice_date, i.due_date, i.bill_amount, i.status
-        FROM purchase_invoices i
-        JOIN parties p ON i.party_id = p.party_id
-        ORDER BY i.due_date ASC
-    """
-    try:
-        df = pd.read_sql(query, engine)
-    except Exception:
-        df = pd.DataFrame()
-    return df
-
-def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, payment_date, notes, recorded_by):
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp)
-            VALUES (:party_id, :amount_paid, :payment_mode, :payment_date, :notes, :recorded_by, :timestamp)
-        """), {
-            "party_id": party_id, "amount_paid": payment_amount, "payment_mode": payment_mode,
-            "payment_date": payment_date, "notes": notes, "recorded_by": recorded_by,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
+                    with reminder_tab_od:
+                        if not due_overdue.empty:
+                            st.dataframe(due_overdue[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.success("No overdue bills!")
+                            
+                    with reminder_tab_tod:
+                        if not due_today.empty:
+                            st.dataframe(due_today[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No bills due today.")
+                            
+                    with reminder_tab_tom:
+                        if not due_tomorrow.empty:
+                            st.dataframe(due_tomorrow[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No bills due tomorrow.")
+                            
+                    with reminder_tab_fut:
+                        if not due_upcoming.empty:
+                            st.dataframe(due_upcoming[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No upcoming bills in the next 7 days.")
+            else:
+                st.success("🎉 All purchase bills are fully paid!")
         
-        if invoice_ids_to_clear:
-            conn.execute(
-                text("UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id = ANY(:inv_ids)"),
-                {"inv_ids": invoice_ids_to_clear}
+        st.divider()
+
+        # Excel Summary Download Button for Dashboard
+        col_exp1, col_exp2 = st.columns([2, 3])
+        with col_exp1:
+            output_summary = io.BytesIO()
+            with pd.ExcelWriter(output_summary, engine='openpyxl') as writer:
+                summary_export_df = df_dues[[
+                    "party_name", "opening_balance", "opening_as_on", 
+                    "total_bills", "total_payments", "total_due_amount", "Payment_Urgency"
+                ]].copy()
+                
+                total_row = pd.DataFrame([{
+                    "party_name": "GRAND TOTAL",
+                    "opening_balance": df_dues["opening_balance"].sum(),
+                    "opening_as_on": "-",
+                    "total_bills": df_dues["total_bills"].sum(),
+                    "total_payments": df_dues["total_payments"].sum(),
+                    "total_due_amount": df_dues["total_due_amount"].sum(),
+                    "Payment_Urgency": "-"
+                }])
+                summary_export_df = pd.concat([summary_export_df, total_row], ignore_index=True)
+                summary_export_df.to_excel(writer, index=False, sheet_name='Party Ledger Summary')
+                
+            st.download_button(
+                "📥 Download Summary Excel (Opening, Bills, Paid, Dues)", 
+                output_summary.getvalue(), 
+                file_name="party_ledger_summary_report.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
             )
 
-def delete_distributor_payment(payment_id):
-    engine = get_engine()
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM distributor_payments WHERE payment_id = :payment_id"), {"payment_id": payment_id})
+        search_party = st.text_input("🔍 Search Party Name:", key="search_party_dash")
+        filtered_dues = df_dues
+        if search_party:
+            filtered_dues = df_dues[df_dues["party_name"].str.contains(search_party, case=False, na=False)]
 
-def get_distributor_payments_df() -> pd.DataFrame:
-    engine = get_engine()
-    try:
-        df = pd.read_sql("""
-            SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.payment_date, dp.notes, dp.recorded_by, dp.timestamp
-            FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
-            ORDER BY dp.payment_id DESC
-        """, engine)
-    except Exception:
-        df = pd.DataFrame()
-    return df
+        st.markdown("---")
+        for _, party_row in filtered_dues.iterrows():
+            p_name = party_row["party_name"]
+            total_due = party_row["total_due_amount"]
+            urgency = party_row["Payment_Urgency"]
+            opening_bal = party_row["opening_balance"]
+            total_bills = party_row["total_bills"]
+            total_pays = party_row["total_payments"]
+            opening_as_on = party_row["opening_as_on"]
 
-def get_party_dues_summary() -> pd.DataFrame:
-    parties_df = get_parties_df()
-    if parties_df.empty: return pd.DataFrame()
-    invoices_df = get_purchase_invoices_df()
-    payments_df = get_distributor_payments_df()
-    summary_list = []
-    today = datetime.now().date()
+            expander_label = f"🏢 **{p_name}** | Net Due: **₹{total_due:,.2f}** — {urgency}"
+            
+            with st.expander(expander_label):
+                c_s1, c_s2, c_s3 = st.columns(3)
+                c_s1.markdown(f"🔹 **Opening Balance:** ₹{opening_bal:,.2f} *(As on {opening_as_on})*")
+                c_s2.markdown(f"📦 **Total Bills:** ₹{total_bills:,.2f}")
+                c_s3.markdown(f"💸 **Total Paid:** ₹{total_pays:,.2f}")
+                
+                st.markdown("---")
+                if not df_invoices.empty:
+                    party_bills = df_invoices[df_invoices["party_name"] == p_name]
+                    if not party_bills.empty:
+                        st.markdown("#### 📋 All Bills & Due Dates for this Party:")
+                        today = date.today()
+                        def calc_bill_urgency(row):
+                            if row["status"] == "PAID":
+                                return "✅ PAID"
+                            due_dt = datetime.strptime(row["due_date"], "%Y-%m-%d").date()
+                            days_left = (due_dt - today).days
+                            if days_left < 0: return f"🔴 OVERDUE ({row['due_date']})"
+                            elif days_left == 0: return f"🟠 DUE TODAY ({row['due_date']})"
+                            elif days_left == 1: return f"🟡 DUE TOMORROW ({row['due_date']})"
+                            else: return f"🟢 Safe ({row['due_date']}, {days_left}d left)"
 
-    for _, party in parties_df.iterrows():
-        p_id, p_name = party["party_id"], party["party_name"]
-        opening_bal, as_on = party["opening_balance"], party["as_on_date"]
+                        party_bills["Bill_Status_Urgency"] = party_bills.apply(calc_bill_urgency, axis=1)
+                        st.dataframe(
+                            party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount", "status", "Bill_Status_Urgency"]], 
+                            use_container_width=True, 
+                            hide_index=True
+                        )
+                    else:
+                        st.info("No purchase bills recorded for this party.")
+    else:
+        st.info("No parties or purchase dues found yet.")
+
+# --- MODULE 2: ADD PURCHASE BILLS & AI PAYMENT SCANNER ---
+elif menu_choice == "📥 Add Purchase Bills & AI Pay":
+    st.markdown("### 📥 Add Purchase Bills & AI Finance Scanner")
+    col_op1, col_op2 = st.columns(2)
+
+    with col_op1:
+        with st.container(border=True):
+            st.subheader("📥 Add New Purchase Bills")
+            bill_tab_ai, bill_tab_excel, bill_tab_manual = st.tabs(["🤖 AI Image Scan", "📊 Bulk Excel", "✍️ Manual Entry"])
+            
+            with bill_tab_ai:
+                st.markdown("Upload photo of distributor purchase bill/invoice to extract & save.")
+                uploaded_bill_img = st.file_uploader("Upload Purchase Bill Image", type=["png", "jpg", "jpeg"], key=f"ai_bill_up_{rc}")
+                
+                if uploaded_bill_img:
+                    st.image(uploaded_bill_img, caption="Uploaded Purchase Bill", width=220)
+                    if st.button("🔍 Extract & Save Bill via AI"):
+                        with st.spinner("Gemini AI is scanning invoice..."):
+                            extracted_bill = extract_invoice_from_image(uploaded_bill_img)
+                            if "error" in extracted_bill:
+                                st.error(f"AI Error: {extracted_bill['error']}")
+                            else:
+                                st.success("Extracted Successfully!")
+                                st.json(extracted_bill)
+                                
+                                df_parties = get_parties_df()
+                                p_name_raw = str(extracted_bill.get("party_name", "")).strip()
+                                matched_party = df_parties[df_parties["party_name"].str.contains(p_name_raw, case=False, na=False)]
+                                
+                                if not matched_party.empty:
+                                    p_id = int(matched_party.iloc[0]["party_id"])
+                                    credit_days = int(matched_party.iloc[0]["credit_period_days"])
+                                    inv_amt = float(extracted_bill.get("bill_amount", 0.0))
+                                    inv_no = str(extracted_bill.get("invoice_number", "INV-AI"))
+                                    inv_date = str(extracted_bill.get("invoice_date", date.today().strftime("%Y-%m-%d")))
+                                    
+                                    if inv_amt > 0:
+                                        save_purchase_invoice(p_id, inv_no, inv_date, credit_days, inv_amt, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                                        st.success(f"✅ Successfully saved Bill **{inv_no}** (₹{inv_amt:,.2f}) for {matched_party.iloc[0]['party_name']}!")
+                                        st.session_state.reset_counter += 1
+                                        st.rerun()
+                                    else:
+                                        st.warning("Invalid bill amount.")
+                                else:
+                                    st.error(f"Party '{p_name_raw}' not found in Master List.")
+
+            with bill_tab_excel:
+                st.markdown("Upload Excel (`.xlsx`, `.xls`) or CSV with columns: `party_name`, `invoice_number`, `invoice_date`, `bill_amount`.")
+                uploaded_inv_file = st.file_uploader("Upload Purchase Bills File", type=["xlsx", "xls", "csv"], key=f"dash_inv_up_{rc}")
+                
+                if uploaded_inv_file:
+                    try:
+                        file_name = uploaded_inv_file.name.lower()
+                        if file_name.endswith('.csv'):
+                            df_inv_upload = pd.read_csv(uploaded_inv_file)
+                        elif file_name.endswith('.xls'):
+                            try:
+                                df_inv_upload = pd.read_excel(uploaded_inv_file, engine='xlrd')
+                            except ImportError:
+                                st.error("⚠️ This is an older `.xls` file. Please save it as a modern `.xlsx` or `.csv` file, or install `xlrd` (`pip install xlrd`).")
+                                st.stop()
+                        else:
+                            df_inv_upload = pd.read_excel(uploaded_inv_file, engine='openpyxl')
+                            
+                        df_inv_upload.columns = [str(c).strip().lower().replace(" ", "_") for c in df_inv_upload.columns]
+                        
+                        df_master_parties = get_parties_df()
+                        existing_parties = set(df_master_parties["party_name"].str.strip().str.title().tolist()) if not df_master_parties.empty else set()
+                        
+                        def validate_row(row):
+                            p_name = str(row.get('party_name', '')).strip().title()
+                            inv_no = str(row.get('invoice_number', '')).strip()
+                            amt = safe_float(row.get('bill_amount'), 0.0)
+                            
+                            if not p_name or p_name == "Nan" or pd.isna(row.get('party_name')):
+                                return "❌ Missing Party Name"
+                            if not inv_no or inv_no == "Nan":
+                                return "❌ Missing Invoice Number"
+                            if amt <= 0:
+                                return "❌ Invalid Amount"
+                            if p_name in existing_parties:
+                                return "✅ Valid"
+                            else:
+                                return "❌ Party Not Found in Master"
+                                
+                        df_inv_upload["Validation_Status"] = df_inv_upload.apply(validate_row, axis=1)
+                        
+                        def style_status(val):
+                            if "✅" in str(val):
+                                return "background-color: #e2efda; color: #375623; font-weight: bold;"
+                            else:
+                                return "background-color: #ffcccc; color: #c00000; font-weight: bold;"
+                                
+                        st.markdown("### 📋 Step 1: Review Upload Preview & Party Match")
+                        st.dataframe(df_inv_upload.style.map(style_status, subset=['Validation_Status']), use_container_width=True, hide_index=True)
+                        
+                        invalid_count = (df_inv_upload["Validation_Status"] != "✅ Valid").sum()
+                        
+                        if invalid_count > 0:
+                            st.error(f"⚠️ Found **{invalid_count}** problematic rows highlighted in red above. Please correct your file and re-upload, or register missing parties in the **Party Master** tab first.")
+                        else:
+                            st.success("✨ All entries and party names match your Master List perfectly! Ready for import.")
+                            if st.button("🚀 Step 2: Confirm & Import Verified Bills", type="primary", key="btn_confirm_import"):
+                                count, errors = bulk_save_purchase_invoices(df_inv_upload)
+                                if count > 0:
+                                    st.success(f"✅ Successfully imported {count} purchase bills and cleared form state!")
+                                    st.session_state.reset_counter += 1
+                                    st.rerun()
+                                if errors:
+                                    for err in errors:
+                                        st.warning(err)
+                    except Exception as e:
+                        st.error(f"Error reading file: {e}")
+
+            with bill_tab_manual:
+                st.markdown("Manually enter purchase bill details.")
+                df_parties_manual = get_parties_df()
+                if not df_parties_manual.empty:
+                    with st.form("manual_bill_form", clear_on_submit=True):
+                        m_party = st.selectbox("Select Distributor *", df_parties_manual["party_name"].tolist(), key="manual_party_sel")
+                        m_inv_no = st.text_input("Invoice Number *", key="manual_inv_no")
+                        m_inv_date = st.date_input("Invoice Date", value=date.today(), key="manual_inv_date")
+                        m_amt = st.number_input("Bill Amount (₹) *", min_value=0.0, step=100.0, key="manual_amt")
+                        
+                        if st.form_submit_button("💾 Save Manual Bill") and m_inv_no and m_amt > 0:
+                            party_row = df_parties_manual[df_parties_manual["party_name"] == m_party].iloc[0]
+                            save_purchase_invoice(
+                                party_id=int(party_row["party_id"]),
+                                inv_no=m_inv_no.strip(),
+                                inv_date=m_inv_date.strftime("%Y-%m-%d"),
+                                credit_days=int(party_row["credit_period_days"]),
+                                amount=m_amt,
+                                created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            )
+                            st.success(f"✅ Successfully saved bill **{m_inv_no}** for {m_party} and reset form!")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
+                else:
+                    st.warning("Please register at least one purchase party first.")
+
+    with col_op2:
+        with st.container(border=True):
+            st.subheader("🤖 AI Scan Daily Finance / Bill Paid")
+            st.markdown("Upload image of payment receipt or daily finance sheet to record payment.")
+            uploaded_slip = st.file_uploader("Upload Payment Slip / Finance Image", type=["png", "jpg", "jpeg"], key=f"ai_slip_up_{rc}")
+            
+            if uploaded_slip:
+                st.image(uploaded_slip, caption="Uploaded Finance Slip", width=220)
+                if st.button("🔍 Extract & Record Payment via AI"):
+                    with st.spinner("Gemini AI is analyzing slip..."):
+                        extracted = extract_payment_from_image(uploaded_slip)
+                        if "error" in extracted:
+                            st.error(f"AI Error: {extracted['error']}")
+                        else:
+                            st.success("Extracted Successfully!")
+                            st.json(extracted)
+                            
+                            df_parties = get_parties_df()
+                            matched_party = df_parties[df_parties["party_name"].str.contains(extracted.get("party_name", ""), case=False, na=False)]
+                            
+                            if not matched_party.empty:
+                                p_id = int(matched_party.iloc[0]["party_id"])
+                                amt = float(extracted.get("amount_paid", 0.0))
+                                if amt > 0:
+                                    record_distributor_payment(
+                                        party_id=p_id,
+                                        invoice_ids_to_clear=[],
+                                        payment_amount=amt,
+                                        payment_mode=extracted.get("payment_mode", "CASH"),
+                                        payment_date=date.today().strftime("%Y-%m-%d"),
+                                        notes=extracted.get("notes", "AI Extracted Slip"),
+                                        recorded_by=current_user
+                                    )
+                                    st.success(f"✅ Successfully recorded payment of ₹{amt:,.2f} for {matched_party.iloc[0]['party_name']} and reset uploader!")
+                                    st.session_state.reset_counter += 1
+                                    st.rerun()
+                                else:
+                                    st.warning("Invalid payment amount.")
+                            else:
+                                st.error(f"Party '{extracted.get('party_name')}' not found.")
+
+# --- MODULE 3: PARTY MASTER & SETUP ---
+elif menu_choice == "📋 Party Master & Setup":
+    st.markdown("### 📋 Purchase Parties Master Setup & Management")
+    with st.container(border=True):
+        add_tab, bulk_party_tab, edit_del_tab = st.tabs(["➕ Add Single Party", "📤 Bulk Upload Parties", "🛠️ Edit / Delete Party"])
         
-        total_bills = 0.0
-        earliest_due = None
-        if not invoices_df.empty:
-            party_invs = invoices_df[invoices_df["party_id"] == p_id]
-            if not party_invs.empty:
-                total_bills = party_invs["bill_amount"].sum()
-                unpaid_party_invs = party_invs[party_invs["status"] == "UNPAID"]
-                if not unpaid_party_invs.empty:
-                    earliest_due = unpaid_party_invs["due_date"].min()
+        with add_tab:
+            with st.form("party_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                p_name = c1.text_input("Party / Distributor Name *")
+                p_phone = c2.text_input("Phone Number")
+                p_gstin = c3.text_input("GSTIN Number")
 
-        total_payments = 0.0
-        if not payments_df.empty and "party_id" in payments_df.columns:
-            party_pays = payments_df[payments_df["party_id"] == p_id]
-            if not party_pays.empty:
-                total_payments = party_pays["amount_paid"].sum()
+                c4, c5, c6 = st.columns(3)
+                p_credit = c4.number_input("Credit Period (Days)", min_value=0, value=15)
+                p_opening = c5.number_input("Opening Balance (₹)", min_value=0.0, step=100.0)
+                p_as_on_date = c6.date_input("Opening Balance As on Date", value=date.today())
 
-        total_due = opening_bal + total_bills - total_payments
+                if st.form_submit_button("💾 Save Party") and p_name:
+                    save_party(
+                        name=p_name.strip().title(),
+                        phone=p_phone.strip(),
+                        gstin=p_gstin.strip().upper(),
+                        credit_days=p_credit,
+                        opening_bal=p_opening,
+                        as_on_date=p_as_on_date.strftime("%Y-%m-%d"),
+                        created_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                    st.success(f"✅ Successfully saved party: **{p_name.strip().title()}** and cleared form!")
+                    st.session_state.reset_counter += 1
+                    st.rerun()
+
+        with bulk_party_tab:
+            uploaded_party_file = st.file_uploader("Upload Party Excel/CSV", type=["xlsx", "xls", "csv"], key=f"party_uploader_{rc}")
+            if uploaded_party_file:
+                try:
+                    df_party_upload = pd.read_csv(uploaded_party_file) if uploaded_party_file.name.endswith('.csv') else pd.read_excel(uploaded_party_file, engine='openpyxl')
+                    st.dataframe(df_party_upload.head(), use_container_width=True)
+                    if st.button("🚀 Process & Import Parties"):
+                        count, errors = bulk_save_parties(df_party_upload)
+                        if count > 0:
+                            st.success(f"✅ Successfully imported {count} parties and reset uploader!")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
+                        if errors:
+                            st.error(f"Encountered {len(errors)} issues:")
+                            for err in errors[:5]: st.warning(err)
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
+
+        with edit_del_tab:
+            df_parties_mgmt = get_parties_df()
+            if not df_parties_mgmt.empty:
+                selected_party_name = st.selectbox("Select Party to Edit or Delete", df_parties_mgmt["party_name"].tolist(), key="mgmt_party_sel")
+                party_record = df_parties_mgmt[df_parties_mgmt["party_name"] == selected_party_name].iloc[0]
+                party_id = int(party_record["party_id"])
+                
+                sub_edit_tab, sub_del_tab = st.tabs(["✏️ Edit Party Details", "🗑️ Delete Party"])
+                
+                with sub_edit_tab:
+                    with st.form(f"edit_party_form_{party_id}"):
+                        curr_name = str(party_record.get("party_name", ""))
+                        curr_phone = str(party_record.get("phone", "")) if pd.notna(party_record.get("phone")) else ""
+                        curr_gstin = str(party_record.get("gstin", "")) if pd.notna(party_record.get("gstin")) else ""
+                        curr_credit = safe_int(party_record.get("credit_period_days", 15), 15)
+                        curr_opening = safe_float(party_record.get("opening_balance", 0.0), 0.0)
+                        if curr_opening < 0: curr_opening = 0.0
+
+                        e_name = st.text_input("Party Name", value=curr_name, key=f"e_name_{party_id}")
+                        e_phone = st.text_input("Phone Number", value=curr_phone, key=f"e_phone_{party_id}")
+                        e_gstin = st.text_input("GSTIN Number", value=curr_gstin, key=f"e_gstin_{party_id}")
+                        e_credit = st.number_input("Credit Period (Days)", min_value=0, value=curr_credit, key=f"e_credit_{party_id}")
+                        e_opening = st.number_input("Opening Balance (₹)", min_value=0.0, value=curr_opening, step=100.0, key=f"e_opening_{party_id}")
+                        
+                        if st.form_submit_button("💾 Save Changes"):
+                            if e_name.strip():
+                                update_party(
+                                    party_id=party_id,
+                                    name=e_name.strip().title(),
+                                    phone=e_phone.strip(),
+                                    gstin=e_gstin.strip().upper(),
+                                    credit_days=e_credit,
+                                    opening_bal=e_opening,
+                                    as_on_date=str(party_record.get("as_on_date", date.today().strftime("%Y-%m-%d")))
+                                )
+                                st.success(f"✅ Successfully updated details for **{e_name.strip().title()}**!")
+                                st.session_state.reset_counter += 1
+                                st.rerun()
+                            else:
+                                st.error("Party name cannot be empty.")
+                        
+                with sub_del_tab:
+                    st.warning(f"⚠️ Deleting **{selected_party_name}** will also remove all associated purchase invoices and payment records permanently.")
+                    confirm_del = st.checkbox(f"I confirm I want to delete {selected_party_name}", key="confirm_delete_chk")
+                    if st.button("🗑️ Permanently Delete Party", type="primary", key="btn_del_party"):
+                        if confirm_del:
+                            delete_party(party_id)
+                            st.success(f"✅ Successfully deleted {selected_party_name}.")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
+                        else:
+                            st.error("Please check the confirmation box to enable deletion.")
+            else:
+                st.info("No parties registered in the system yet.")
+
+# --- MODULE 4: PAYMENTS & BILL CLEARING ---
+elif menu_choice == "💸 Payments & Bill Clearing":
+    st.markdown("### 💸 Record Daily Distributor Payment & Manage History")
+    with st.container(border=True):
+        df_parties_pay = get_parties_df()
+        if not df_parties_pay.empty:
+            pay_party = st.selectbox("Select Distributor to Pay *", df_parties_pay["party_name"].tolist(), key="dash_pay_party_sel")
+            party_row = df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]
+            party_id = int(party_row["party_id"])
+
+            df_invoices = get_purchase_invoices_df()
+            unpaid_party_bills = pd.DataFrame()
+            if not df_invoices.empty:
+                unpaid_party_bills = df_invoices[(df_invoices["party_id"] == party_id) & (df_invoices["status"] == "UNPAID")]
+
+            selected_invoice_ids = []
+            if not unpaid_party_bills.empty:
+                with st.expander(f"📦 Select Unpaid Bills to Clear for {pay_party} (Optional)"):
+                    for _, bill in unpaid_party_bills.iterrows():
+                        checked = st.checkbox(
+                            f"Invoice: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", 
+                            key=f"dash_inv_chk_{bill['invoice_id']}"
+                        )
+                        if checked:
+                            selected_invoice_ids.append(int(bill['invoice_id']))
+            else:
+                st.info(f"ℹ️ No specific unpaid invoices found for {pay_party}. Payment will be recorded as a general credit/advance adjustment.")
+
+            with st.form("dash_payment_form", clear_on_submit=True):
+                pc1, pc2, pc3 = st.columns(3)
+                pay_amount = pc1.number_input("Payment Amount Paid (₹) *", min_value=0.0, step=100.0, key="dash_pay_amt")
+                pay_mode = pc2.selectbox("Payment Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"], key="dash_pay_mode")
+                pay_date = pc3.date_input("Payment Date *", value=date.today(), key="dash_pay_date")
+                
+                pay_notes = st.text_input("Payment Notes / Reference No. (Optional)", key="dash_pay_notes")
+
+                if st.form_submit_button("✅ Confirm & Record Payment"):
+                    if pay_amount > 0:
+                        record_distributor_payment(
+                            party_id=party_id,
+                            invoice_ids_to_clear=selected_invoice_ids,
+                            payment_amount=pay_amount,
+                            payment_mode=pay_mode,
+                            payment_date=pay_date.strftime("%Y-%m-%d"),
+                            notes=pay_notes.strip(),
+                            recorded_by=current_user
+                        )
+                        st.success(f"✅ Successfully recorded payment of ₹{pay_amount:,.2f} to **{pay_party}** for date {pay_date.strftime('%Y-%m-%d')}!")
+                        st.session_state.reset_counter += 1
+                        st.rerun()
+                    else:
+                        st.error("Please enter a valid payment amount greater than 0.")
+
+            with st.expander("📜 View & Manage Payment History (Delete Wrong Entries)"):
+                df_payments = get_distributor_payments_df()
+                if not df_payments.empty:
+                    st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "payment_date", "recorded_by", "notes"]], use_container_width=True, hide_index=True)
+                    
+                    st.markdown("---")
+                    st.markdown("##### 🗑️ Delete Wrongly Recorded Payment")
+                    
+                    payment_options = df_payments.apply(
+                        lambda r: f"ID: {r['payment_id']} | Party: {r['party_name']} | ₹{r['amount_paid']:,.2f} | Paid Date: {r.get('payment_date', 'N/A')}", 
+                        axis=1
+                    ).tolist()
+                    
+                    selected_pay_to_del = st.selectbox("Select Payment Entry to Remove", payment_options, key="del_pay_sel")
+                    
+                    if st.button("🗑️ Delete Selected Payment", type="primary", key="btn_del_payment"):
+                        try:
+                            p_id_extracted = int(selected_pay_to_del.split("|")[0].replace("ID:", "").strip())
+                            delete_distributor_payment(p_id_extracted)
+                            st.success(f"✅ Successfully deleted payment entry (ID: {p_id_extracted}) and restored outstandings!")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting payment: {e}")
+                else:
+                    st.info("No distributor payments recorded yet.")
+        else:
+            st.warning("Please register at least one purchase party first.")
+
+# --- MODULE 5: DATA EXPORTS & LEGACY BACKUP ---
+elif menu_choice == "💾 Data Exports (Excel)":
+    st.markdown("### 💾 Download System Data & Legacy Backup")
+    with st.container(border=True):
+        st.markdown("#### 📥 Individual Table Downloads")
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
         
-        urgency = "🟢 Safe"
-        ref_date_str = earliest_due if earliest_due else as_on
+        with col_dl1:
+            df_p = get_parties_df()
+            if not df_p.empty:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_p.to_excel(writer, index=False, sheet_name='Parties')
+                st.download_button("📥 Download Parties Excel", output.getvalue(), file_name="parties_master.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+        with col_dl2:
+            df_i = get_purchase_invoices_df()
+            if not df_i.empty:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_i.to_excel(writer, index=False, sheet_name='Invoices')
+                st.download_button("📥 Download Invoices Excel", output.getvalue(), file_name="purchase_invoices.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        if ref_date_str:
+        with col_dl3:
+            df_pay = get_distributor_payments_df()
+            if not df_pay.empty:
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_pay.to_excel(writer, index=False, sheet_name='Payments')
+                st.download_button("📥 Download Payments Excel", output.getvalue(), file_name="distributor_payments.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
+        st.divider()
+        st.markdown("#### 📦 Master Legacy Backup (All Tables in One Excel Snapshot)")
+        st.markdown("Download a complete multi-sheet Excel file containing your entire Supabase database for offline archiving.")
+        
+        if st.button("⚙️ Generate Master Legacy Backup"):
             try:
-                ref_dt = datetime.strptime(str(ref_date_str), "%Y-%m-%d").date()
-                days_left = (ref_dt - today).days
-                if days_left < 0: urgency = f"🔴 OVERDUE ({ref_date_str})"
-                elif days_left <= 3: urgency = f"🟡 Due Soon ({ref_date_str}, {days_left}d)"
-                else: urgency = f"🟢 Safe ({ref_date_str}, {days_left}d)"
-            except Exception: pass
-
-        summary_list.append({
-            "party_name": p_name, 
-            "opening_balance": opening_bal, 
-            "opening_as_on": as_on,
-            "total_bills": total_bills,
-            "total_payments": total_payments,
-            "total_due_amount": total_due,
-            "earliest_due_date": earliest_due if earliest_due else "Opening Only",
-            "Payment_Urgency": urgency
-        })
-    return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
-
-def extract_invoice_from_image(image_file):
-    if not AI_AVAILABLE:
-        return {"error": "google-genai package not installed."}
-    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return {"error": "Gemini API key not found in environment or secrets."}
-    try:
-        client = genai.Client(api_key=api_key)
-        image = Image.open(image_file)
-        prompt = """
-        Analyze this distributor purchase invoice or bill image. 
-        Extract the following details in valid JSON format:
-        {
-            "party_name": "Name of the supplier, distributor, or pharma company",
-            "invoice_number": "Invoice or bill number string",
-            "invoice_date": "Date of invoice in YYYY-MM-DD format",
-            "bill_amount": 0.0
-        }
-        Return ONLY valid JSON without any markdown formatting or extra text.
-        """
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
-        import json
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
-        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
-        return json.loads(text_resp)
-    except Exception as e:
-        return {"error": str(e)}
-
-def extract_payment_from_image(image_file):
-    if not AI_AVAILABLE:
-        return {"error": "google-genai package not installed."}
-    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return {"error": "Gemini API key not found in environment or secrets."}
-    try:
-        client = genai.Client(api_key=api_key)
-        image = Image.open(image_file)
-        prompt = """
-        Analyze this daily finance sheet, payment receipt, or distributor payment slip. 
-        Extract the following details in valid JSON format:
-        {
-            "party_name": "Name of the distributor or party paid",
-            "amount_paid": 0.0,
-            "payment_mode": "CASH / UPI / BANK_TRANSFER / CHEQUE",
-            "notes": "Any reference number or notes mentioned"
-        }
-        Return ONLY valid JSON without any markdown formatting or extra text.
-        """
-        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
-        import json
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
-        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
-        return json.loads(text_resp)
-    except Exception as e:
-        return {"error": str(e)}
+                master_output = io.BytesIO()
+                with pd.ExcelWriter(master_output, engine='openpyxl') as writer:
+                    df_p = get_parties_df()
+                    df_i = get_purchase_invoices_df()
+                    df_pay = get_distributor_payments_df()
+                    
+                    if not df_p.empty: df_p.to_excel(writer, index=False, sheet_name='Parties')
+                    if not df_i.empty: df_i.to_excel(writer, index=False, sheet_name='Invoices')
+                    if not df_pay.empty: df_pay.to_excel(writer, index=False, sheet_name='Payments')
+                
+                st.download_button(
+                    "📥 Download Master Legacy Backup File (.xlsx)",
+                    master_output.getvalue(),
+                    file_name=f"jeeva_medical_ledger_legacy_backup_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+                st.success("✅ Master legacy backup generated successfully!")
+            except Exception as e:
+                st.error(f"Error generating backup: {e}")
