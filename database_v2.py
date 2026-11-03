@@ -1,9 +1,9 @@
 # database_v2.py
-import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 import os
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 try:
     from google import genai
@@ -12,55 +12,56 @@ try:
 except ImportError:
     AI_AVAILABLE = False
 
-DB_FILE = "medical_store_v2.db"
+SUPABASE_URL = os.environ.get("SUPABASE_DB_URL") or st.secrets.get("SUPABASE_DB_URL", "")
+
+def get_engine():
+    if not SUPABASE_URL:
+        st.error("⚠️ SUPABASE_DB_URL is missing from Streamlit secrets or environment variables.")
+        st.stop()
+    return create_engine(SUPABASE_URL)
 
 def init_clean_database():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    """Initializes PostgreSQL tables in Supabase if they don't already exist."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS parties (
+                party_id SERIAL PRIMARY KEY,
+                party_name TEXT UNIQUE NOT NULL,
+                phone TEXT,
+                gstin TEXT,
+                credit_period_days INTEGER DEFAULT 15,
+                opening_balance REAL DEFAULT 0.0,
+                as_on_date TEXT,
+                created_at TEXT
+            )
+        """))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS parties (
-            party_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            party_name TEXT UNIQUE NOT NULL,
-            phone TEXT,
-            gstin TEXT,
-            credit_period_days INTEGER DEFAULT 15,
-            opening_balance REAL DEFAULT 0.0,
-            as_on_date TEXT,
-            created_at TEXT
-        )
-    """)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS purchase_invoices (
+                invoice_id SERIAL PRIMARY KEY,
+                party_id INTEGER REFERENCES parties(party_id) ON DELETE CASCADE,
+                invoice_number TEXT NOT NULL,
+                invoice_date TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                bill_amount REAL NOT NULL,
+                status TEXT DEFAULT 'UNPAID',
+                created_at TEXT
+            )
+        """))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS purchase_invoices (
-            invoice_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            party_id INTEGER,
-            invoice_number TEXT NOT NULL,
-            invoice_date TEXT NOT NULL,
-            due_date TEXT NOT NULL,
-            bill_amount REAL NOT NULL,
-            status TEXT DEFAULT 'UNPAID',
-            created_at TEXT,
-            FOREIGN KEY (party_id) REFERENCES parties (party_id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS distributor_payments (
-            payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            party_id INTEGER,
-            amount_paid REAL NOT NULL,
-            payment_mode TEXT,
-            payment_date TEXT,
-            notes TEXT,
-            recorded_by TEXT,
-            timestamp TEXT,
-            FOREIGN KEY (party_id) REFERENCES parties (party_id)
-        )
-    """)
-
-    conn.commit()
-    conn.close()
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS distributor_payments (
+                payment_id SERIAL PRIMARY KEY,
+                party_id INTEGER REFERENCES parties(party_id) ON DELETE CASCADE,
+                amount_paid REAL NOT NULL,
+                payment_mode TEXT,
+                payment_date TEXT,
+                notes TEXT,
+                recorded_by TEXT,
+                timestamp TEXT
+            )
+        """))
 
 def safe_int(val, default=15):
     if pd.isna(val) or str(val).strip() == "" or str(val).strip().lower() == "nan":
@@ -96,88 +97,90 @@ def parse_date(val):
     return datetime.now().strftime("%Y-%m-%d")
 
 def get_parties_df() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM parties ORDER BY party_name ASC", conn)
-    conn.close()
+    engine = get_engine()
+    try:
+        df = pd.read_sql("SELECT * FROM parties ORDER BY party_name ASC", engine)
+    except Exception:
+        df = pd.DataFrame()
     return df
 
 def save_party(name, phone, gstin, credit_days, opening_bal, as_on_date, created_date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(party_name) DO UPDATE SET
-        phone=excluded.phone,
-        gstin=excluded.gstin,
-        credit_period_days=excluded.credit_period_days,
-        opening_balance=excluded.opening_balance,
-        as_on_date=excluded.as_on_date
-    """, (name, phone, gstin, credit_days, opening_bal, as_on_date, created_date))
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
+            VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_date)
+            ON CONFLICT (party_name) DO UPDATE SET
+            phone = EXCLUDED.phone,
+            gstin = EXCLUDED.gstin,
+            credit_period_days = EXCLUDED.credit_period_days,
+            opening_balance = EXCLUDED.opening_balance,
+            as_on_date = EXCLUDED.as_on_date
+        """), {
+            "name": name, "phone": phone, "gstin": gstin, 
+            "credit_days": credit_days, "opening_bal": opening_bal, 
+            "as_on_date": as_on_date, "created_date": created_date
+        })
 
 def update_party(party_id, name, phone, gstin, credit_days, opening_bal, as_on_date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE parties 
-        SET party_name = ?, phone = ?, gstin = ?, credit_period_days = ?, opening_balance = ?, as_on_date = ?
-        WHERE party_id = ?
-    """, (name, phone, gstin, credit_days, opening_bal, as_on_date, party_id))
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE parties 
+            SET party_name = :name, phone = :phone, gstin = :gstin, 
+                credit_period_days = :credit_days, opening_balance = :opening_bal, as_on_date = :as_on_date
+            WHERE party_id = :party_id
+        """), {
+            "name": name, "phone": phone, "gstin": gstin, 
+            "credit_days": credit_days, "opening_bal": opening_bal, 
+            "as_on_date": as_on_date, "party_id": party_id
+        })
 
 def delete_party(party_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM purchase_invoices WHERE party_id = ?", (party_id,))
-        cursor.execute("DELETE FROM distributor_payments WHERE party_id = ?", (party_id,))
-        cursor.execute("DELETE FROM parties WHERE party_id = ?", (party_id,))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM purchase_invoices WHERE party_id = :party_id"), {"party_id": party_id})
+        conn.execute(text("DELETE FROM distributor_payments WHERE party_id = :party_id"), {"party_id": party_id})
+        conn.execute(text("DELETE FROM parties WHERE party_id = :party_id"), {"party_id": party_id})
 
 def bulk_save_parties(df_parties):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    engine = get_engine()
     df_parties.columns = [str(c).strip().lower().replace(" ", "_") for c in df_parties.columns]
     success_count = 0
     errors = []
     
-    for idx, row in df_parties.iterrows():
-        try:
-            name = str(row.get('party_name', '')).strip().title()
-            if not name or name == "Nan" or pd.isna(row.get('party_name')):
-                continue
-            phone = str(row.get('phone', '')).strip()
-            if phone == "nan" or pd.isna(row.get('phone')): phone = ""
-            gstin = str(row.get('gstin', '')).strip().upper()
-            if gstin == "NAN" or pd.isna(row.get('gstin')): gstin = ""
-            
-            credit_days = safe_int(row.get('credit_period_days'), 15)
-            opening_bal = safe_float(row.get('opening_balance'), 0.0)
-            as_on_date = parse_date(row.get('as_on_date'))
-            
-            cursor.execute("""
-                INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(party_name) DO UPDATE SET
-                phone=excluded.phone,
-                gstin=excluded.gstin,
-                credit_period_days=excluded.credit_period_days,
-                opening_balance=excluded.opening_balance,
-                as_on_date=excluded.as_on_date
-            """, (name, phone, gstin, credit_days, opening_bal, as_on_date, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            success_count += 1
-        except Exception as e:
-            errors.append(f"Row {idx+2}: {e}")
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        for idx, row in df_parties.iterrows():
+            try:
+                name = str(row.get('party_name', '')).strip().title()
+                if not name or name == "Nan" or pd.isna(row.get('party_name')):
+                    continue
+                phone = str(row.get('phone', '')).strip()
+                if phone == "nan" or pd.isna(row.get('phone')): phone = ""
+                gstin = str(row.get('gstin', '')).strip().upper()
+                if gstin == "NAN" or pd.isna(row.get('gstin')): gstin = ""
+                
+                credit_days = safe_int(row.get('credit_period_days'), 15)
+                opening_bal = safe_float(row.get('opening_balance'), 0.0)
+                as_on_date = parse_date(row.get('as_on_date'))
+                
+                conn.execute(text("""
+                    INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
+                    VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_at)
+                    ON CONFLICT (party_name) DO UPDATE SET
+                    phone = EXCLUDED.phone,
+                    gstin = EXCLUDED.gstin,
+                    credit_period_days = EXCLUDED.credit_period_days,
+                    opening_balance = EXCLUDED.opening_balance,
+                    as_on_date = EXCLUDED.as_on_date
+                """), {
+                    "name": name, "phone": phone, "gstin": gstin, "credit_days": credit_days,
+                    "opening_bal": opening_bal, "as_on_date": as_on_date, 
+                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+                success_count += 1
+            except Exception as e:
+                errors.append(f"Row {idx+2}: {e}")
     return success_count, errors
 
 def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
@@ -185,98 +188,103 @@ def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, creat
     due_dt = inv_dt + timedelta(days=credit_days)
     due_date_str = due_dt.strftime("%Y-%m-%d")
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
-        VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
-    """, (party_id, inv_no, inv_date, due_date_str, amount, created_date))
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
+            VALUES (:party_id, :inv_no, :inv_date, :due_date, :amount, 'UNPAID', :created_date)
+        """), {
+            "party_id": party_id, "inv_no": inv_no, "inv_date": inv_date,
+            "due_date": due_date_str, "amount": amount, "created_date": created_date
+        })
 
 def bulk_save_purchase_invoices(df_invoices):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    engine = get_engine()
     df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
     success_count = 0
     errors = []
     
-    for idx, row in df_invoices.iterrows():
-        try:
-            party_name = str(row.get('party_name', '')).strip().title()
-            inv_no = str(row.get('invoice_number', '')).strip()
-            inv_date = parse_date(row.get('invoice_date'))
-            amount = safe_float(row.get('bill_amount'), 0.0)
-            
-            if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
-                continue
-            
-            cursor.execute("SELECT party_id, credit_period_days FROM parties WHERE party_name = ?", (party_name,))
-            party_row = cursor.fetchone()
-            
-            if party_row:
-                p_id, credit_days = party_row[0], party_row[1]
-                inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
-                due_dt = inv_dt + timedelta(days=int(credit_days))
-                due_date_str = due_dt.strftime("%Y-%m-%d")
+    with engine.begin() as conn:
+        for idx, row in df_invoices.iterrows():
+            try:
+                party_name = str(row.get('party_name', '')).strip().title()
+                inv_no = str(row.get('invoice_number', '')).strip()
+                inv_date = parse_date(row.get('invoice_date'))
+                amount = safe_float(row.get('bill_amount'), 0.0)
                 
-                cursor.execute("""
-                    INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'UNPAID', ?)
-                """, (p_id, inv_no, inv_date, due_date_str, amount, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                success_count += 1
-            else:
-                errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
-        except Exception as e:
-            errors.append(f"Row {idx+2}: {e}")
-    conn.commit()
-    conn.close()
+                if not party_name or party_name == "Nan" or not inv_no or amount <= 0:
+                    continue
+                
+                res = conn.execute(text("SELECT party_id, credit_period_days FROM parties WHERE party_name = :p_name"), {"p_name": party_name}).fetchone()
+                
+                if res:
+                    p_id, credit_days = res[0], res[1]
+                    inv_dt = datetime.strptime(inv_date, "%Y-%m-%d")
+                    due_dt = inv_dt + timedelta(days=int(credit_days))
+                    due_date_str = due_dt.strftime("%Y-%m-%d")
+                    
+                    conn.execute(text("""
+                        INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at)
+                        VALUES (:p_id, :inv_no, :inv_date, :due_date, :amount, 'UNPAID', :created_at)
+                    """), {
+                        "p_id": p_id, "inv_no": inv_no, "inv_date": inv_date,
+                        "due_date": due_date_str, "amount": amount,
+                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    success_count += 1
+                else:
+                    errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
+            except Exception as e:
+                errors.append(f"Row {idx+2}: {e}")
     return success_count, errors
 
 def get_purchase_invoices_df() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
+    engine = get_engine()
     query = """
         SELECT i.invoice_id, p.party_id, p.party_name, i.invoice_number, i.invoice_date, i.due_date, i.bill_amount, i.status
         FROM purchase_invoices i
         JOIN parties p ON i.party_id = p.party_id
         ORDER BY i.due_date ASC
     """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    try:
+        df = pd.read_sql(query, engine)
+    except Exception:
+        df = pd.DataFrame()
     return df
 
 def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, payment_mode, payment_date, notes, recorded_by):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (party_id, payment_amount, payment_mode, payment_date, notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    
-    if invoice_ids_to_clear:
-        placeholders = ','.join(['?'] * len(invoice_ids_to_clear))
-        cursor.execute(f"UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id IN ({placeholders})", invoice_ids_to_clear)
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp)
+            VALUES (:party_id, :amount_paid, :payment_mode, :payment_date, :notes, :recorded_by, :timestamp)
+        """), {
+            "party_id": party_id, "amount_paid": payment_amount, "payment_mode": payment_mode,
+            "payment_date": payment_date, "notes": notes, "recorded_by": recorded_by,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        
+        if invoice_ids_to_clear:
+            conn.execute(
+                text("UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id = ANY(:inv_ids)"),
+                {"inv_ids": invoice_ids_to_clear}
+            )
 
 def delete_distributor_payment(payment_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM distributor_payments WHERE payment_id = ?", (payment_id,))
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM distributor_payments WHERE payment_id = :payment_id"), {"payment_id": payment_id})
 
 def get_distributor_payments_df() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_FILE)
+    engine = get_engine()
     try:
-        df = pd.read_sql_query("""
+        df = pd.read_sql("""
             SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.payment_date, dp.notes, dp.recorded_by, dp.timestamp
             FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id
             ORDER BY dp.payment_id DESC
-        """, conn)
+        """, engine)
     except Exception:
         df = pd.DataFrame()
-    conn.close()
     return df
 
 def get_party_dues_summary() -> pd.DataFrame:
@@ -353,7 +361,7 @@ def extract_invoice_from_image(image_file):
         }
         Return ONLY valid JSON without any markdown formatting or extra text.
         """
-        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
         import json
         text_resp = response.text.strip()
         if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
@@ -382,7 +390,7 @@ def extract_payment_from_image(image_file):
         }
         Return ONLY valid JSON without any markdown formatting or extra text.
         """
-        response = client.models.generate_content(model='gemini-3.8-flash', contents=[image, prompt])
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
         import json
         text_resp = response.text.strip()
         if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
