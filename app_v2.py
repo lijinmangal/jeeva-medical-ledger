@@ -180,6 +180,8 @@ elif menu_choice == "📥 Add Purchase Bills":
                         st.success(f"✅ {len(inv_ids_val)} Bill(s) deleted successfully!")
                         st.session_state.reset_counter += 1
                         st.rerun()
+                    else:
+                        st.error("Please select at least one bill from the dropdown to delete.")
             else: st.info(f"No bills found for {filter_date.strftime('%Y-%m-%d')}.")
 
 # --- MODULE 3: PARTY MASTER ---
@@ -249,42 +251,56 @@ elif menu_choice == "📋 Party Master":
 
 # --- MODULE 4: PAYMENTS ---
 elif menu_choice == "💸 Payments":
-    st.markdown("### 💸 Record Daily Distributor Payment")
-    df_parties_pay = get_parties_df()
-    if not df_parties_pay.empty:
-        pay_party = st.selectbox("Select Distributor to Pay", df_parties_pay["party_name"].tolist())
-        party_id = int(df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]["party_id"])
+    st.markdown("### 💸 Record & Manage Distributor Payments")
+    pay_tab_record, pay_tab_manage = st.tabs(["💸 Record New Payment", "🗑️ Manage & Delete Payments"])
+    
+    with pay_tab_record:
+        df_parties_pay = get_parties_df()
+        if not df_parties_pay.empty:
+            pay_party = st.selectbox("Select Distributor to Pay", df_parties_pay["party_name"].tolist())
+            party_id = int(df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]["party_id"])
 
-        with st.form("dash_payment_form", clear_on_submit=True):
-            pay_amount = st.number_input("Amount Paid (₹) *", min_value=0.0, step=100.0)
-            pay_mode = st.selectbox("Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
-            
-            # Restored Payment Date and Notes fields
-            pay_date = st.date_input("Payment Date *", value=date.today())
-            pay_notes = st.text_input("Payment Notes / Reference No. (Optional)")
-            
-            if st.form_submit_button("✅ Record Payment") and pay_amount > 0:
-                record_distributor_payment(party_id, [], pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
-                st.success("✅ Payment saved!")
-                st.session_state.reset_counter += 1
-                st.rerun()
+            with st.form("dash_payment_form", clear_on_submit=True):
+                pay_amount = st.number_input("Amount Paid (₹) *", min_value=0.0, step=100.0)
+                pay_mode = st.selectbox("Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
+                pay_date = st.date_input("Payment Date *", value=date.today())
+                pay_notes = st.text_input("Payment Notes / Reference No. (Optional)")
+                
+                if st.form_submit_button("✅ Record Payment") and pay_amount > 0:
+                    record_distributor_payment(party_id, [], pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
+                    st.success("✅ Payment saved!")
+                    st.session_state.reset_counter += 1
+                    st.rerun()
+        else:
+            st.warning("Please register at least one purchase party first.")
 
-        with st.expander("📜 View & Manage Payment History (Multi-Delete)"):
-            df_payments = get_distributor_payments_df()
-            if not df_payments.empty:
-                st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "payment_date", "notes"]], hide_index=True)
-                options = df_payments.apply(lambda r: f"ID: {r['payment_id']} | {r['party_name']} | ₹{r['amount_paid']} | {r['payment_date']}", axis=1).tolist()
+    with pay_tab_manage:
+        df_all_pays = get_distributor_payments_df()
+        if not df_all_pays.empty:
+            st.markdown("#### Filter by Date to Find and Delete Payments")
+            filter_pay_date = st.date_input("Select Payment Date", value=date.today(), key=f"del_pay_date_{rc}")
+            
+            filtered_pays = df_all_pays[df_all_pays["payment_date"] == filter_pay_date.strftime("%Y-%m-%d")]
+            
+            if not filtered_pays.empty:
+                st.dataframe(filtered_pays[["payment_id", "party_name", "amount_paid", "payment_mode", "payment_date", "notes"]], use_container_width=True, hide_index=True)
+                
+                options = filtered_pays.apply(lambda r: f"ID: {r['payment_id']} | {r['party_name']} | ₹{r['amount_paid']} | Mode: {r['payment_mode']}", axis=1).tolist()
                 pays_to_delete = st.multiselect("Select Payment(s) to Delete", options, key=f"multi_del_pay_{rc}")
                 
                 if st.button("🗑️ Permanently Delete Selected Payments", type="primary"):
                     if pays_to_delete:
                         pay_ids_val = [int(item.split("|")[0].replace("ID:", "").strip()) for item in pays_to_delete]
                         delete_multiple_distributor_payments(pay_ids_val)
-                        st.success(f"✅ {len(pay_ids_val)} Payment(s) deleted successfully!")
+                        st.success(f"✅ {len(pay_ids_val)} Payment(s) deleted successfully! Market dues updated.")
                         st.session_state.reset_counter += 1
                         st.rerun()
-                    else: st.error("Please select at least one payment to delete.")
-            else: st.info("No payments recorded yet.")
+                    else:
+                        st.error("Please select at least one payment from the dropdown to delete.")
+            else:
+                st.info(f"No payments found for {filter_pay_date.strftime('%Y-%m-%d')}.")
+        else:
+            st.info("No payments have been recorded yet.")
 
 # --- MODULE 5: DATA EXPORTS ---
 elif menu_choice == "💾 Data Exports (Excel)":
