@@ -258,8 +258,13 @@ elif menu_choice == "💸 Payments":
         with st.form("dash_payment_form", clear_on_submit=True):
             pay_amount = st.number_input("Amount Paid (₹) *", min_value=0.0, step=100.0)
             pay_mode = st.selectbox("Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
+            
+            # Restored Payment Date and Notes fields
+            pay_date = st.date_input("Payment Date *", value=date.today())
+            pay_notes = st.text_input("Payment Notes / Reference No. (Optional)")
+            
             if st.form_submit_button("✅ Record Payment") and pay_amount > 0:
-                record_distributor_payment(party_id, [], pay_amount, pay_mode, date.today().strftime("%Y-%m-%d"), "", current_user)
+                record_distributor_payment(party_id, [], pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
                 st.success("✅ Payment saved!")
                 st.session_state.reset_counter += 1
                 st.rerun()
@@ -267,7 +272,7 @@ elif menu_choice == "💸 Payments":
         with st.expander("📜 View & Manage Payment History (Multi-Delete)"):
             df_payments = get_distributor_payments_df()
             if not df_payments.empty:
-                st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "payment_date"]], hide_index=True)
+                st.dataframe(df_payments[["payment_id", "party_name", "amount_paid", "payment_mode", "payment_date", "notes"]], hide_index=True)
                 options = df_payments.apply(lambda r: f"ID: {r['payment_id']} | {r['party_name']} | ₹{r['amount_paid']} | {r['payment_date']}", axis=1).tolist()
                 pays_to_delete = st.multiselect("Select Payment(s) to Delete", options, key=f"multi_del_pay_{rc}")
                 
