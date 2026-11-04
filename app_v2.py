@@ -82,7 +82,6 @@ def get_dynamic_active_bills():
         p_id = r['party_id']
         opening_bal = safe_float(r['opening_balance'])
         
-        # Calculate total payments made to this specific party
         total_pays = 0.0
         if not df_payments.empty and 'party_id' in df_payments.columns:
             party_pays = df_payments[df_payments['party_id'] == p_id]
@@ -90,7 +89,6 @@ def get_dynamic_active_bills():
             
         pool = total_pays
         
-        # 1. Deduct from Opening Balance First
         if pool >= opening_bal:
             pool -= opening_bal
             rem_old = 0.0
@@ -101,7 +99,6 @@ def get_dynamic_active_bills():
         if rem_old > 0:
             old_dues_list.append({"party_id": p_id, "Party Name": p_name, "Old Dues (₹)": rem_old, "As On Date": r['as_on_date']})
             
-        # 2. Deduct remaining payment pool from oldest bills (FIFO)
         if not df_invoices.empty and 'party_id' in df_invoices.columns:
             p_invs = df_invoices[df_invoices['party_id'] == p_id].sort_values('invoice_date')
             for _, bill in p_invs.iterrows():
@@ -121,7 +118,7 @@ def get_dynamic_active_bills():
                         "invoice_number": bill['invoice_number'],
                         "invoice_date": bill['invoice_date'],
                         "due_date": bill['due_date'],
-                        "bill_amount": rem_b, # Dynamic remaining amount
+                        "bill_amount": rem_b, 
                     })
                     
     return pd.DataFrame(active_bills_list), pd.DataFrame(old_dues_list)
@@ -132,12 +129,13 @@ df_active_bills, df_old_dues = get_dynamic_active_bills()
 # --- MODULE 1: DASHBOARD ---
 if menu_choice == "📊 Dashboard & Market Dues":
     df_dues = get_party_dues_summary()
+    df_invoices = get_purchase_invoices_df()
+    df_payments = get_distributor_payments_df()
 
     if not df_dues.empty:
         total_net_dues = df_dues['total_due_amount'].sum()
         total_old_dues = df_old_dues['Old Dues (₹)'].sum() if not df_old_dues.empty else 0.0
         
-        # 1. TOTAL OUTSTANDING (Centered Box)
         st.markdown(f"""
         <div style="text-align:center; padding:20px; border:2px solid #4a90e2; border-radius:10px; background-color:#f8fbff; margin-bottom:25px;">
             <h3 style="margin:0; color:#333; font-family:sans-serif;">Total Outstanding</h3>
@@ -180,7 +178,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 }, inplace=True)
                 st.dataframe(display_df, hide_index=True, use_container_width=True)
 
-        # 2. CLICKABLE TABS (Dues Timeline)
         tab_old, tab_od, tab_tod, tab_tom, tab_upc = st.tabs([
             f"🟣 Old Dues (₹{total_old_dues:,.0f})",
             f"🔴 Overdue (₹{due_overdue['bill_amount'].sum() if not due_overdue.empty else 0:,.0f})",
@@ -203,7 +200,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
         
         st.divider()
         
-        # 3. INDIVIDUAL PARTY LEDGERS
         st.markdown("#### 🏢 Individual Party Ledgers")
         search_party = st.text_input("🔍 Search Party Name to view specific ledger:")
         filtered_dues = df_dues[df_dues["party_name"].str.contains(search_party, case=False, na=False)] if search_party else df_dues
@@ -215,10 +211,66 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 c2.markdown(f"📦 **Bills:** ₹{party_row['total_bills']:,.2f}")
                 c3.markdown(f"💸 **Paid:** ₹{party_row['total_payments']:,.2f}")
                 
-                if not df_active_bills.empty:
-                    party_bills = df_active_bills[df_active_bills["party_name"] == party_row['party_name']]
-                    if not party_bills.empty:
-                        st.dataframe(party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount"]], hide_index=True, use_container_width=True)
+                # FULL CHRONOLOGICAL LEDGER GENERATION
+                transactions = []
+                
+                # 1. Add Opening Balance
+                transactions.append({
+                    "Date": party_row['opening_as_on'],
+                    "Type": "Opening Balance",
+                    "Ref / Notes": "-",
+                    "Debit (Bill) ₹": 0.0,
+                    "Credit (Paid) ₹": 0.0,
+                    "Balance (₹)": party_row['opening_balance'],
+                    "_sort": 0
+                })
+                
+                # 2. Add Purchase Bills
+                if not df_invoices.empty:
+                    p_bills = df_invoices[df_invoices["party_name"] == party_row['party_name']]
+                    for _, b in p_bills.iterrows():
+                        transactions.append({
+                            "Date": b['invoice_date'],
+                            "Type": "Purchase Bill",
+                            "Ref / Notes": f"Inv: {b['invoice_number']}",
+                            "Debit (Bill) ₹": b['bill_amount'],
+                            "Credit (Paid) ₹": 0.0,
+                            "Balance (₹)": 0.0,
+                            "_sort": 1
+                        })
+                        
+                # 3. Add Payments
+                if not df_payments.empty:
+                    p_pays = df_payments[df_payments["party_name"] == party_row['party_name']]
+                    for _, p in p_pays.iterrows():
+                        notes_str = str(p['notes']).strip() if pd.notna(p['notes']) and str(p['notes']).strip() and str(p['notes']).strip() != 'nan' else p['payment_mode']
+                        transactions.append({
+                            "Date": p['payment_date'],
+                            "Type": "Payment",
+                            "Ref / Notes": notes_str,
+                            "Debit (Bill) ₹": 0.0,
+                            "Credit (Paid) ₹": p['amount_paid'],
+                            "Balance (₹)": 0.0,
+                            "_sort": 2
+                        })
+                
+                # Calculate Running Balance Chronologically
+                df_ledger = pd.DataFrame(transactions)
+                df_ledger.sort_values(by=["Date", "_sort"], inplace=True)
+                df_ledger.reset_index(drop=True, inplace=True)
+                
+                run_bal = 0.0
+                for idx, row in df_ledger.iterrows():
+                    if row['_sort'] == 0:
+                        run_bal += row['Balance (₹)']
+                    else:
+                        run_bal = run_bal + row['Debit (Bill) ₹'] - row['Credit (Paid) ₹']
+                        df_ledger.at[idx, 'Balance (₹)'] = run_bal
+                        
+                df_ledger.drop(columns=["_sort"], inplace=True)
+                
+                st.markdown("##### 📜 Chronological Statement of Account")
+                st.dataframe(df_ledger, use_container_width=True, hide_index=True)
     else:
         st.info("No parties or purchase dues found yet.")
 
@@ -284,7 +336,7 @@ elif menu_choice == "📥 Add Purchase Bills":
                         else: st.error("Party not found in Master List.")
 
     with bill_tab_manage:
-        df_all_invs = get_purchase_invoices_df() # Uses raw DB for accurate original deletions
+        df_all_invs = get_purchase_invoices_df() 
         if not df_all_invs.empty:
             filter_date = st.date_input("Select Invoice Date to Filter", value=date.today(), key=f"del_date_{rc}")
             filtered_invs = df_all_invs[df_all_invs["invoice_date"] == filter_date.strftime("%Y-%m-%d")]
