@@ -74,19 +74,44 @@ if menu_choice == "📊 Dashboard & Market Dues":
         st.metric("Total Market Dues Payable", f"₹{df_dues['total_due_amount'].sum():,.2f}")
         st.divider()
         
-        st.markdown("#### 🚨 Manager's Payment Reminders")
+        # RESTORED: Full 7-Day Dashboard Breakdown
+        st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
         if not df_invoices.empty:
             unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
             if not unpaid_invoices.empty:
                 today = date.today()
-                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(lambda d: (datetime.strptime(d, "%Y-%m-%d").date() - today).days)
                 
+                def get_days_diff(due_date_str):
+                    return (datetime.strptime(due_date_str, "%Y-%m-%d").date() - today).days
+
+                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(get_days_diff)
+
                 due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0]
+                due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
                 due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
-                
-                col_r1, col_r2 = st.columns(2)
+                due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
+
+                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
                 with col_r1: st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum():,.2f}")
                 with col_r2: st.warning(f"🟠 **Due Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum():,.2f}")
+                with col_r3: st.info(f"🟡 **Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum():,.2f}")
+                with col_r4: st.success(f"🟢 **Next 7 Days ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum():,.2f}")
+
+                with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
+                    reminder_tab_od, reminder_tab_tod, reminder_tab_tom, reminder_tab_fut = st.tabs(["🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
+                    
+                    with reminder_tab_od:
+                        if not due_overdue.empty: st.dataframe(due_overdue[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else: st.success("No overdue bills!")
+                    with reminder_tab_tod:
+                        if not due_today.empty: st.dataframe(due_today[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else: st.info("No bills due today.")
+                    with reminder_tab_tom:
+                        if not due_tomorrow.empty: st.dataframe(due_tomorrow[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else: st.info("No bills due tomorrow.")
+                    with reminder_tab_fut:
+                        if not due_upcoming.empty: st.dataframe(due_upcoming[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                        else: st.info("No upcoming bills in the next 7 days.")
             else:
                 st.success("🎉 All purchase bills are fully paid!")
         
@@ -260,6 +285,25 @@ elif menu_choice == "💸 Payments":
             pay_party = st.selectbox("Select Distributor to Pay", df_parties_pay["party_name"].tolist())
             party_id = int(df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]["party_id"])
 
+            # RESTORED: Specific Bill Clearing Checkboxes
+            df_invoices = get_purchase_invoices_df()
+            unpaid_party_bills = pd.DataFrame()
+            if not df_invoices.empty:
+                unpaid_party_bills = df_invoices[(df_invoices["party_id"] == party_id) & (df_invoices["status"] == "UNPAID")]
+
+            selected_invoice_ids = []
+            if not unpaid_party_bills.empty:
+                with st.expander(f"📦 Select Unpaid Bills to Clear for {pay_party} (Optional)"):
+                    for _, bill in unpaid_party_bills.iterrows():
+                        checked = st.checkbox(
+                            f"Invoice: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", 
+                            key=f"dash_inv_chk_{bill['invoice_id']}_{rc}"
+                        )
+                        if checked:
+                            selected_invoice_ids.append(int(bill['invoice_id']))
+            else:
+                st.info(f"ℹ️ No specific unpaid invoices found for {pay_party}. Payment will be recorded as a general credit/advance adjustment.")
+
             with st.form("dash_payment_form", clear_on_submit=True):
                 pay_amount = st.number_input("Amount Paid (₹) *", min_value=0.0, step=100.0)
                 pay_mode = st.selectbox("Mode", ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"])
@@ -267,7 +311,7 @@ elif menu_choice == "💸 Payments":
                 pay_notes = st.text_input("Payment Notes / Reference No. (Optional)")
                 
                 if st.form_submit_button("✅ Record Payment") and pay_amount > 0:
-                    record_distributor_payment(party_id, [], pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
+                    record_distributor_payment(party_id, selected_invoice_ids, pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
                     st.success("✅ Payment saved!")
                     st.session_state.reset_counter += 1
                     st.rerun()
