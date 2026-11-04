@@ -65,7 +65,7 @@ with st.sidebar:
 rc = st.session_state.reset_counter
 
 # =====================================================================
-# SMART FIFO LEDGER ENGINE: Auto-deducts payments from oldest bills
+# SMART FIFO LEDGER ENGINE: Allocates payments strictly to oldest dues
 # =====================================================================
 def get_dynamic_active_bills():
     df_parties = get_parties_df()
@@ -89,6 +89,7 @@ def get_dynamic_active_bills():
             
         pool = total_pays
         
+        # Rule Enforced: Payment deducts from Opening Balance First
         if pool >= opening_bal:
             pool -= opening_bal
             rem_old = 0.0
@@ -99,6 +100,7 @@ def get_dynamic_active_bills():
         if rem_old > 0:
             old_dues_list.append({"party_id": p_id, "Party Name": p_name, "Old Dues (₹)": rem_old, "As On Date": r['as_on_date']})
             
+        # Deduct remaining payment pool from oldest bills sequentially
         if not df_invoices.empty and 'party_id' in df_invoices.columns:
             p_invs = df_invoices[df_invoices['party_id'] == p_id].sort_values('invoice_date')
             for _, bill in p_invs.iterrows():
@@ -211,21 +213,21 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 c2.markdown(f"📦 **Bills:** ₹{party_row['total_bills']:,.2f}")
                 c3.markdown(f"💸 **Paid:** ₹{party_row['total_payments']:,.2f}")
                 
-                # FULL CHRONOLOGICAL LEDGER GENERATION
+                # STRICT ACCOUNTING CHRONOLOGICAL LEDGER GENERATION
                 transactions = []
                 
-                # 1. Add Opening Balance
+                # 1. Add Opening Balance (Acts as a Due / Debit)
                 transactions.append({
                     "Date": party_row['opening_as_on'],
                     "Type": "Opening Balance",
                     "Ref / Notes": "-",
-                    "Debit (Bill) ₹": 0.0,
+                    "Debit (Bill) ₹": party_row['opening_balance'],
                     "Credit (Paid) ₹": 0.0,
-                    "Balance (₹)": party_row['opening_balance'],
+                    "Balance (₹)": 0.0,
                     "_sort": 0
                 })
                 
-                # 2. Add Purchase Bills
+                # 2. Add Purchase Bills (Acts as a Due / Debit)
                 if not df_invoices.empty:
                     p_bills = df_invoices[df_invoices["party_name"] == party_row['party_name']]
                     for _, b in p_bills.iterrows():
@@ -239,7 +241,7 @@ if menu_choice == "📊 Dashboard & Market Dues":
                             "_sort": 1
                         })
                         
-                # 3. Add Payments
+                # 3. Add Payments (Acts as Cleared / Credit)
                 if not df_payments.empty:
                     p_pays = df_payments[df_payments["party_name"] == party_row['party_name']]
                     for _, p in p_pays.iterrows():
@@ -254,22 +256,19 @@ if menu_choice == "📊 Dashboard & Market Dues":
                             "_sort": 2
                         })
                 
-                # Calculate Running Balance Chronologically
+                # Mathematical Calculation: Prev Balance + Debit - Credit = New Balance
                 df_ledger = pd.DataFrame(transactions)
                 df_ledger.sort_values(by=["Date", "_sort"], inplace=True)
                 df_ledger.reset_index(drop=True, inplace=True)
                 
                 run_bal = 0.0
                 for idx, row in df_ledger.iterrows():
-                    if row['_sort'] == 0:
-                        run_bal += row['Balance (₹)']
-                    else:
-                        run_bal = run_bal + row['Debit (Bill) ₹'] - row['Credit (Paid) ₹']
-                        df_ledger.at[idx, 'Balance (₹)'] = run_bal
+                    run_bal = run_bal + row['Debit (Bill) ₹'] - row['Credit (Paid) ₹']
+                    df_ledger.at[idx, 'Balance (₹)'] = run_bal
                         
                 df_ledger.drop(columns=["_sort"], inplace=True)
                 
-                st.markdown("##### 📜 Chronological Statement of Account")
+                st.markdown("##### 📜 Strict Chronological Statement of Account")
                 st.dataframe(df_ledger, use_container_width=True, hide_index=True)
     else:
         st.info("No parties or purchase dues found yet.")
