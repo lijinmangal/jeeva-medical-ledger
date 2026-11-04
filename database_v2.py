@@ -232,6 +232,7 @@ def get_party_dues_summary() -> pd.DataFrame:
             party_pays = payments_df[payments_df["party_id"] == p_id]
             if not party_pays.empty: total_payments = party_pays["amount_paid"].sum()
 
+        # RULE ENFORCEMENT: Total Outstanding = Opening Dues + Bills - Paid
         total_due = opening_bal + total_bills - total_payments
         urgency = "🟢 Safe"
         ref_date_str = earliest_due if earliest_due else as_on
