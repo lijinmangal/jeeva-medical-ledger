@@ -75,44 +75,66 @@ if menu_choice == "📊 Dashboard & Market Dues":
         st.divider()
         
         st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
+        
+        # Calculate strict Old Dues (Remaining Opening Balance) separated from actual bills
+        old_dues_list = []
+        total_old_dues = 0.0
+        for _, r in df_dues.iterrows():
+            party_unpaid_sum = 0.0
+            if not df_invoices.empty:
+                p_invs = df_invoices[(df_invoices['party_name'] == r['party_name']) & (df_invoices['status'] == 'UNPAID')]
+                party_unpaid_sum = p_invs['bill_amount'].sum()
+            
+            # The remaining old due is Total Net Due minus the specific unpaid bills
+            rem_old_due = max(0.0, r['total_due_amount'] - party_unpaid_sum)
+            if rem_old_due > 0:
+                old_dues_list.append({"Party Name": r['party_name'], "Old Dues (₹)": rem_old_due, "As On Date": r['opening_as_on']})
+                total_old_dues += rem_old_due
+        
+        df_old_dues = pd.DataFrame(old_dues_list)
+        
+        due_today = pd.DataFrame()
+        due_tomorrow = pd.DataFrame()
+        due_overdue = pd.DataFrame()
+        due_upcoming = pd.DataFrame()
+        
         if not df_invoices.empty:
             unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
             if not unpaid_invoices.empty:
                 today = date.today()
+                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(lambda d: (datetime.strptime(d, "%Y-%m-%d").date() - today).days)
                 
-                def get_days_diff(due_date_str):
-                    return (datetime.strptime(due_date_str, "%Y-%m-%d").date() - today).days
-
-                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(get_days_diff)
-
                 due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0]
                 due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
                 due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
                 due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
 
-                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
-                with col_r1: st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum():,.2f}")
-                with col_r2: st.warning(f"🟠 **Due Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum():,.2f}")
-                with col_r3: st.info(f"🟡 **Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum():,.2f}")
-                with col_r4: st.success(f"🟢 **Next 7 Days ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum():,.2f}")
+        # 5-Column Display with Old Dues isolated
+        col_r0, col_r1, col_r2, col_r3, col_r4 = st.columns(5)
+        with col_r0: st.info(f"🟣 **Old Dues**\n\nAmt: ₹{total_old_dues:,.2f}")
+        with col_r1: st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum() if not due_overdue.empty else 0:,.2f}")
+        with col_r2: st.warning(f"🟠 **Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum() if not due_today.empty else 0:,.2f}")
+        with col_r3: st.info(f"🟡 **Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum() if not due_tomorrow.empty else 0:,.2f}")
+        with col_r4: st.success(f"🟢 **Next 7d ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum() if not due_upcoming.empty else 0:,.2f}")
 
-                with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
-                    reminder_tab_od, reminder_tab_tod, reminder_tab_tom, reminder_tab_fut = st.tabs(["🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
-                    
-                    with reminder_tab_od:
-                        if not due_overdue.empty: st.dataframe(due_overdue[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
-                        else: st.success("No overdue bills!")
-                    with reminder_tab_tod:
-                        if not due_today.empty: st.dataframe(due_today[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
-                        else: st.info("No bills due today.")
-                    with reminder_tab_tom:
-                        if not due_tomorrow.empty: st.dataframe(due_tomorrow[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
-                        else: st.info("No bills due tomorrow.")
-                    with reminder_tab_fut:
-                        if not due_upcoming.empty: st.dataframe(due_upcoming[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
-                        else: st.info("No upcoming bills in the next 7 days.")
-            else:
-                st.success("🎉 All purchase bills are fully paid!")
+        with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
+            rem_tab_old, rem_tab_od, rem_tab_tod, rem_tab_tom, rem_tab_fut = st.tabs(["🟣 Old Dues", "🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
+            
+            with rem_tab_old:
+                if not df_old_dues.empty: st.dataframe(df_old_dues, use_container_width=True, hide_index=True)
+                else: st.success("No pending old opening dues!")
+            with rem_tab_od:
+                if not due_overdue.empty: st.dataframe(due_overdue[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                else: st.success("No overdue bills!")
+            with rem_tab_tod:
+                if not due_today.empty: st.dataframe(due_today[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                else: st.info("No bills due today.")
+            with rem_tab_tom:
+                if not due_tomorrow.empty: st.dataframe(due_tomorrow[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                else: st.info("No bills due tomorrow.")
+            with rem_tab_fut:
+                if not due_upcoming.empty: st.dataframe(due_upcoming[["party_name", "invoice_number", "invoice_date", "due_date", "bill_amount"]], use_container_width=True, hide_index=True)
+                else: st.info("No upcoming bills in the next 7 days.")
         
         st.divider()
         search_party = st.text_input("🔍 Search Party Name:")
