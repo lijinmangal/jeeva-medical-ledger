@@ -64,13 +64,78 @@ with st.sidebar:
 
 rc = st.session_state.reset_counter
 
+# =====================================================================
+# SMART FIFO LEDGER ENGINE: Auto-deducts payments from oldest bills
+# =====================================================================
+def get_dynamic_active_bills():
+    df_parties = get_parties_df()
+    df_invoices = get_purchase_invoices_df()
+    df_payments = get_distributor_payments_df()
+    
+    active_bills_list = []
+    old_dues_list = []
+    
+    if df_parties.empty: return pd.DataFrame(), pd.DataFrame()
+        
+    for _, r in df_parties.iterrows():
+        p_name = r['party_name']
+        p_id = r['party_id']
+        opening_bal = safe_float(r['opening_balance'])
+        
+        # Calculate total payments made to this specific party
+        total_pays = 0.0
+        if not df_payments.empty and 'party_id' in df_payments.columns:
+            party_pays = df_payments[df_payments['party_id'] == p_id]
+            if not party_pays.empty: total_pays = party_pays['amount_paid'].sum()
+            
+        pool = total_pays
+        
+        # 1. Deduct from Opening Balance First
+        if pool >= opening_bal:
+            pool -= opening_bal
+            rem_old = 0.0
+        else:
+            rem_old = opening_bal - pool
+            pool = 0.0
+            
+        if rem_old > 0:
+            old_dues_list.append({"party_id": p_id, "Party Name": p_name, "Old Dues (₹)": rem_old, "As On Date": r['as_on_date']})
+            
+        # 2. Deduct remaining payment pool from oldest bills (FIFO)
+        if not df_invoices.empty and 'party_id' in df_invoices.columns:
+            p_invs = df_invoices[df_invoices['party_id'] == p_id].sort_values('invoice_date')
+            for _, bill in p_invs.iterrows():
+                b_amt = safe_float(bill['bill_amount'])
+                if pool >= b_amt:
+                    pool -= b_amt
+                    rem_b = 0.0
+                else:
+                    rem_b = b_amt - pool
+                    pool = 0.0
+                    
+                if rem_b > 0:
+                    active_bills_list.append({
+                        "invoice_id": bill['invoice_id'],
+                        "party_id": p_id,
+                        "party_name": p_name,
+                        "invoice_number": bill['invoice_number'],
+                        "invoice_date": bill['invoice_date'],
+                        "due_date": bill['due_date'],
+                        "bill_amount": rem_b, # Dynamic remaining amount
+                    })
+                    
+    return pd.DataFrame(active_bills_list), pd.DataFrame(old_dues_list)
+
+df_active_bills, df_old_dues = get_dynamic_active_bills()
+# =====================================================================
+
 # --- MODULE 1: DASHBOARD ---
 if menu_choice == "📊 Dashboard & Market Dues":
     df_dues = get_party_dues_summary()
-    df_invoices = get_purchase_invoices_df()
 
     if not df_dues.empty:
         total_net_dues = df_dues['total_due_amount'].sum()
+        total_old_dues = df_old_dues['Old Dues (₹)'].sum() if not df_old_dues.empty else 0.0
         
         # 1. TOTAL OUTSTANDING (Centered Box)
         st.markdown(f"""
@@ -81,44 +146,24 @@ if menu_choice == "📊 Dashboard & Market Dues":
         </div>
         """, unsafe_allow_html=True)
         
-        # Smart Math for Old Dues
-        old_dues_list = []
-        total_old_dues = 0.0
-        for _, r in df_dues.iterrows():
-            party_unpaid_sum = 0.0
-            if not df_invoices.empty:
-                p_invs = df_invoices[(df_invoices['party_name'] == r['party_name']) & (df_invoices['status'] == 'UNPAID')]
-                party_unpaid_sum = p_invs['bill_amount'].sum()
-            
-            rem_old_due = max(0.0, r['total_due_amount'] - party_unpaid_sum)
-            if rem_old_due > 0:
-                old_dues_list.append({"Party Name": r['party_name'], "Old Dues (₹)": rem_old_due, "As On Date": r['opening_as_on']})
-                total_old_dues += rem_old_due
-        
-        df_old_dues = pd.DataFrame(old_dues_list)
-        
         due_today = pd.DataFrame()
         due_tomorrow = pd.DataFrame()
         due_overdue = pd.DataFrame()
         due_upcoming = pd.DataFrame()
         
-        if not df_invoices.empty:
-            unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
-            if not unpaid_invoices.empty:
-                today = date.today()
-                unpaid_invoices["days_left"] = unpaid_invoices["due_date"].apply(lambda d: (datetime.strptime(d, "%Y-%m-%d").date() - today).days)
-                
-                due_today = unpaid_invoices[unpaid_invoices["days_left"] == 0].copy()
-                due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1].copy()
-                due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0].copy()
-                due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)].copy()
+        if not df_active_bills.empty:
+            today = date.today()
+            df_active_bills["days_left"] = df_active_bills["due_date"].apply(lambda d: (datetime.strptime(str(d), "%Y-%m-%d").date() - today).days)
+            
+            due_today = df_active_bills[df_active_bills["days_left"] == 0].copy()
+            due_tomorrow = df_active_bills[df_active_bills["days_left"] == 1].copy()
+            due_overdue = df_active_bills[df_active_bills["days_left"] < 0].copy()
+            due_upcoming = df_active_bills[(df_active_bills["days_left"] > 1) & (df_active_bills["days_left"] <= 7)].copy()
 
-        # Helper function to display detailed party totals and bills
         def display_due_tab(df_bills, label):
             if df_bills.empty:
                 st.success(f"No {label} bills found!")
                 return
-                
             party_totals = df_bills.groupby("party_name")["bill_amount"].sum().reset_index()
             party_totals.rename(columns={"party_name": "Party Name", "bill_amount": "Total Due (₹)"}, inplace=True)
             
@@ -130,11 +175,8 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 st.markdown("##### Detailed Bills List")
                 display_df = df_bills[["party_name", "days_left", "invoice_date", "due_date", "bill_amount"]].copy()
                 display_df.rename(columns={
-                    "party_name": "Party Name", 
-                    "days_left": "Days Left", 
-                    "invoice_date": "Invoice Date", 
-                    "due_date": "Due Date", 
-                    "bill_amount": "Bill Total (₹)"
+                    "party_name": "Party Name", "days_left": "Days Left", 
+                    "invoice_date": "Invoice Date", "due_date": "Due Date", "bill_amount": "Bill Total (₹)"
                 }, inplace=True)
                 st.dataframe(display_df, hide_index=True, use_container_width=True)
 
@@ -150,7 +192,7 @@ if menu_choice == "📊 Dashboard & Market Dues":
         with tab_old:
             if not df_old_dues.empty:
                 st.markdown("##### Party-wise Old Opening Dues")
-                st.dataframe(df_old_dues, hide_index=True, use_container_width=True)
+                st.dataframe(df_old_dues[["Party Name", "Old Dues (₹)", "As On Date"]], hide_index=True, use_container_width=True)
             else:
                 st.success("No pending old opening dues!")
                 
@@ -173,11 +215,10 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 c2.markdown(f"📦 **Bills:** ₹{party_row['total_bills']:,.2f}")
                 c3.markdown(f"💸 **Paid:** ₹{party_row['total_payments']:,.2f}")
                 
-                # Show specific bills for this party
-                if not df_invoices.empty:
-                    party_bills = df_invoices[df_invoices["party_name"] == party_row['party_name']]
+                if not df_active_bills.empty:
+                    party_bills = df_active_bills[df_active_bills["party_name"] == party_row['party_name']]
                     if not party_bills.empty:
-                        st.dataframe(party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount", "status"]], hide_index=True, use_container_width=True)
+                        st.dataframe(party_bills[["invoice_number", "invoice_date", "due_date", "bill_amount"]], hide_index=True, use_container_width=True)
     else:
         st.info("No parties or purchase dues found yet.")
 
@@ -243,7 +284,7 @@ elif menu_choice == "📥 Add Purchase Bills":
                         else: st.error("Party not found in Master List.")
 
     with bill_tab_manage:
-        df_all_invs = get_purchase_invoices_df()
+        df_all_invs = get_purchase_invoices_df() # Uses raw DB for accurate original deletions
         if not df_all_invs.empty:
             filter_date = st.date_input("Select Invoice Date to Filter", value=date.today(), key=f"del_date_{rc}")
             filtered_invs = df_all_invs[df_all_invs["invoice_date"] == filter_date.strftime("%Y-%m-%d")]
@@ -338,23 +379,22 @@ elif menu_choice == "💸 Payments":
             pay_party = st.selectbox("Select Distributor to Pay", df_parties_pay["party_name"].tolist())
             party_id = int(df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]["party_id"])
 
-            df_invoices = get_purchase_invoices_df()
             unpaid_party_bills = pd.DataFrame()
-            if not df_invoices.empty:
-                unpaid_party_bills = df_invoices[(df_invoices["party_id"] == party_id) & (df_invoices["status"] == "UNPAID")]
+            if not df_active_bills.empty:
+                unpaid_party_bills = df_active_bills[df_active_bills["party_id"] == party_id]
 
             selected_invoice_ids = []
             if not unpaid_party_bills.empty:
-                with st.expander(f"📦 Select Unpaid Bills to Clear for {pay_party} (Optional)"):
+                with st.expander(f"📦 Select Active Bills to Clear for {pay_party} (Optional)"):
                     for _, bill in unpaid_party_bills.iterrows():
                         checked = st.checkbox(
-                            f"Invoice: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Amount: **₹{bill['bill_amount']:,.2f}**", 
+                            f"Invoice: **{bill['invoice_number']}** | Date: {bill['invoice_date']} | Due: {bill['due_date']} | Remaining Amt: **₹{bill['bill_amount']:,.2f}**", 
                             key=f"dash_inv_chk_{bill['invoice_id']}_{rc}"
                         )
                         if checked:
                             selected_invoice_ids.append(int(bill['invoice_id']))
             else:
-                st.info(f"ℹ️ No specific unpaid invoices found for {pay_party}. Payment will be recorded as a general credit/advance adjustment.")
+                st.info(f"ℹ️ No active unpaid invoices found for {pay_party}. Payment will be recorded as an advance adjustment.")
 
             with st.form("dash_payment_form", clear_on_submit=True):
                 pay_amount = st.number_input("Amount Paid (₹) *", min_value=0.0, step=100.0)
@@ -364,7 +404,7 @@ elif menu_choice == "💸 Payments":
                 
                 if st.form_submit_button("✅ Record Payment") and pay_amount > 0:
                     record_distributor_payment(party_id, selected_invoice_ids, pay_amount, pay_mode, pay_date.strftime("%Y-%m-%d"), pay_notes.strip(), current_user)
-                    st.success("✅ Payment saved!")
+                    st.success("✅ Payment saved! Active bills reduced automatically.")
                     st.session_state.reset_counter += 1
                     st.rerun()
         else:
