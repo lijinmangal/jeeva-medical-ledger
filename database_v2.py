@@ -130,9 +130,10 @@ def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, creat
     with get_engine().begin() as conn:
         conn.execute(text("INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at) VALUES (:p, :no, :dt, :due, :amt, 'UNPAID', :crt)"), {"p": party_id, "no": inv_no, "dt": inv_date, "due": due_date_str, "amt": amount, "crt": created_date})
 
-def delete_purchase_invoice(invoice_id):
+def delete_multiple_purchase_invoices(invoice_ids):
+    if not invoice_ids: return
     with get_engine().begin() as conn:
-        conn.execute(text("DELETE FROM purchase_invoices WHERE invoice_id = :inv_id"), {"inv_id": invoice_id})
+        conn.execute(text("DELETE FROM purchase_invoices WHERE invoice_id = ANY(:inv_ids)"), {"inv_ids": invoice_ids})
 
 def bulk_save_purchase_invoices(df_invoices):
     parties_df = get_parties_df()
