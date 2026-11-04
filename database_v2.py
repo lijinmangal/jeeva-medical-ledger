@@ -119,8 +119,8 @@ def bulk_save_parties(df_parties):
     if valid_rows:
         with get_engine().begin() as conn:
             conn.execute(text("""
-                INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
-                VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_at)
+                INSERT INTO parties (party_name, credit_period_days, opening_balance, as_on_date, created_at)
+                VALUES (:name, :credit_days, :opening_bal, :as_on_date, :created_at)
                 ON CONFLICT (party_name) DO NOTHING
             """), valid_rows)
     return len(valid_rows), []
@@ -171,6 +171,38 @@ def delete_multiple_distributor_payments(payment_ids):
     if not payment_ids: return
     with get_engine().begin() as conn:
         conn.execute(text("DELETE FROM distributor_payments WHERE payment_id = ANY(:p_ids)"), {"p_ids": payment_ids})
+
+def bulk_save_distributor_payments(df_payments):
+    parties_df = get_parties_df()
+    party_dict = {str(row['party_name']).strip().title(): row['party_id'] for _, row in parties_df.iterrows()}
+    df_payments.columns = [str(c).strip().lower().replace(" ", "_") for c in df_payments.columns]
+    errors, valid_rows = [], []
+    for idx, row in df_payments.iterrows():
+        party_name = str(row.get('party_name', '')).strip().title()
+        amt = safe_float(row.get('amount_paid'), 0.0)
+        if not party_name or party_name == "Nan" or amt <= 0:
+            errors.append(f"Row {idx+2}: Missing fields or invalid amount.")
+            continue
+        if party_name not in party_dict:
+            errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
+            continue
+        p_id = party_dict[party_name]
+        pay_date = parse_date(row.get('payment_date'))
+        mode = str(row.get('payment_mode', 'CASH')).strip().upper()
+        if mode not in ["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"]: mode = "CASH"
+        notes = str(row.get('notes', '')).strip()
+        if notes == "Nan": notes = ""
+        
+        valid_rows.append({
+            "p": p_id, "amt": amt, "mode": mode, "dt": pay_date, 
+            "notes": notes, "by": "Bulk Import", "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        
+    if errors: return 0, errors 
+    if valid_rows:
+        with get_engine().begin() as conn:
+            conn.execute(text("INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp) VALUES (:p, :amt, :mode, :dt, :notes, :by, :ts)"), valid_rows)
+    return len(valid_rows), []
 
 def get_distributor_payments_df() -> pd.DataFrame:
     try: return pd.read_sql("SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.payment_date, dp.notes, dp.recorded_by, dp.timestamp FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id ORDER BY dp.payment_id DESC", get_engine())
