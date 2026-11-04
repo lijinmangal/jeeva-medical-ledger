@@ -14,6 +14,7 @@ except ImportError:
 
 @st.cache_resource(show_spinner=False)
 def get_engine():
+    """Caches the database engine to prevent reconnecting on every click, eliminating lag."""
     db_url = ""
     if "SUPABASE_DB_URL" in st.secrets:
         db_url = st.secrets["SUPABASE_DB_URL"]
@@ -111,16 +112,16 @@ def bulk_save_parties(df_parties):
             errors.append(f"Row {idx+2}: Missing Party Name")
             continue
         valid_rows.append({
-            "name": name, "credit_days": safe_int(row.get('credit_period_days'), 15),
-            "opening_bal": safe_float(row.get('opening_balance'), 0.0), "as_on_date": parse_date(row.get('as_on_date')),
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "name": name, "phone": str(row.get('phone', '')).strip(), "gstin": str(row.get('gstin', '')).strip().upper(),
+            "credit_days": safe_int(row.get('credit_period_days'), 15), "opening_bal": safe_float(row.get('opening_balance'), 0.0), 
+            "as_on_date": parse_date(row.get('as_on_date')), "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
     if errors: return 0, errors 
     if valid_rows:
         with get_engine().begin() as conn:
             conn.execute(text("""
-                INSERT INTO parties (party_name, credit_period_days, opening_balance, as_on_date, created_at)
-                VALUES (:name, :credit_days, :opening_bal, :as_on_date, :created_at)
+                INSERT INTO parties (party_name, phone, gstin, credit_period_days, opening_balance, as_on_date, created_at)
+                VALUES (:name, :phone, :gstin, :credit_days, :opening_bal, :as_on_date, :created_at)
                 ON CONFLICT (party_name) DO NOTHING
             """), valid_rows)
     return len(valid_rows), []
@@ -167,9 +168,10 @@ def record_distributor_payment(party_id, invoice_ids_to_clear, payment_amount, p
         conn.execute(text("INSERT INTO distributor_payments (party_id, amount_paid, payment_mode, payment_date, notes, recorded_by, timestamp) VALUES (:p, :amt, :mode, :dt, :notes, :by, :ts)"), {"p": party_id, "amt": payment_amount, "mode": payment_mode, "dt": payment_date, "notes": notes, "by": recorded_by, "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
         if invoice_ids_to_clear: conn.execute(text("UPDATE purchase_invoices SET status = 'PAID' WHERE invoice_id = ANY(:inv_ids)"), {"inv_ids": invoice_ids_to_clear})
 
-def delete_distributor_payment(payment_id):
+def delete_multiple_distributor_payments(payment_ids):
+    if not payment_ids: return
     with get_engine().begin() as conn:
-        conn.execute(text("DELETE FROM distributor_payments WHERE payment_id = :p"), {"p": payment_id})
+        conn.execute(text("DELETE FROM distributor_payments WHERE payment_id = ANY(:p_ids)"), {"p_ids": payment_ids})
 
 def get_distributor_payments_df() -> pd.DataFrame:
     try: return pd.read_sql("SELECT dp.payment_id, dp.party_id, p.party_name, dp.amount_paid, dp.payment_mode, dp.payment_date, dp.notes, dp.recorded_by, dp.timestamp FROM distributor_payments dp JOIN parties p ON dp.party_id = p.party_id ORDER BY dp.payment_id DESC", get_engine())
@@ -181,14 +183,78 @@ def get_party_dues_summary() -> pd.DataFrame:
     invoices_df = get_purchase_invoices_df()
     payments_df = get_distributor_payments_df()
     summary_list = []
+    today = datetime.now().date()
+    
     for _, party in parties_df.iterrows():
-        p_id, p_name, opening_bal = party["party_id"], party["party_name"], party["opening_balance"]
-        total_bills = invoices_df[invoices_df["party_id"] == p_id]["bill_amount"].sum() if not invoices_df.empty else 0.0
-        total_payments = payments_df[payments_df["party_id"] == p_id]["amount_paid"].sum() if not payments_df.empty else 0.0
+        p_id, p_name, opening_bal, as_on = party["party_id"], party["party_name"], party["opening_balance"], party["as_on_date"]
+        
+        total_bills, earliest_due = 0.0, None
+        if not invoices_df.empty:
+            party_invs = invoices_df[invoices_df["party_id"] == p_id]
+            if not party_invs.empty:
+                total_bills = party_invs["bill_amount"].sum()
+                unpaid = party_invs[party_invs["status"] == "UNPAID"]
+                if not unpaid.empty: earliest_due = unpaid["due_date"].min()
+
+        total_payments = 0.0
+        if not payments_df.empty and "party_id" in payments_df.columns:
+            party_pays = payments_df[payments_df["party_id"] == p_id]
+            if not party_pays.empty: total_payments = party_pays["amount_paid"].sum()
+
+        total_due = opening_bal + total_bills - total_payments
+        urgency = "🟢 Safe"
+        ref_date_str = earliest_due if earliest_due else as_on
+
+        if ref_date_str:
+            try:
+                ref_dt = datetime.strptime(str(ref_date_str), "%Y-%m-%d").date()
+                days_left = (ref_dt - today).days
+                if days_left < 0: urgency = f"🔴 OVERDUE ({ref_date_str})"
+                elif days_left <= 3: urgency = f"🟡 Due Soon ({ref_date_str})"
+                else: urgency = f"🟢 Safe ({ref_date_str})"
+            except: pass
+
         summary_list.append({
-            "party_name": p_name, "opening_balance": opening_bal, "opening_as_on": party["as_on_date"],
+            "party_name": p_name, "opening_balance": opening_bal, "opening_as_on": as_on,
             "total_bills": total_bills, "total_payments": total_payments,
-            "total_due_amount": opening_bal + total_bills - total_payments,
-            "Payment_Urgency": "Check Bills"
+            "total_due_amount": total_due, "Payment_Urgency": urgency
         })
     return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
+
+def extract_invoice_from_image(image_file):
+    if not AI_AVAILABLE: return {"error": "google-genai package not installed."}
+    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key: return {"error": "Gemini API key not found in environment or secrets."}
+    try:
+        client = genai.Client(api_key=api_key)
+        image = Image.open(image_file)
+        prompt = """Analyze this distributor purchase invoice or bill image. 
+        Extract the following details in valid JSON format:
+        { "party_name": "Name of the supplier, distributor, or pharma company", "invoice_number": "Invoice or bill number string", "invoice_date": "Date of invoice in YYYY-MM-DD format", "bill_amount": 0.0 }
+        Return ONLY valid JSON without any markdown formatting or extra text."""
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
+        import json
+        text_resp = response.text.strip()
+        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
+        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
+        return json.loads(text_resp)
+    except Exception as e: return {"error": str(e)}
+
+def extract_payment_from_image(image_file):
+    if not AI_AVAILABLE: return {"error": "google-genai package not installed."}
+    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key: return {"error": "Gemini API key not found in environment or secrets."}
+    try:
+        client = genai.Client(api_key=api_key)
+        image = Image.open(image_file)
+        prompt = """Analyze this daily finance sheet, payment receipt, or distributor payment slip. 
+        Extract the following details in valid JSON format:
+        { "party_name": "Name of the distributor or party paid", "amount_paid": 0.0, "payment_mode": "CASH / UPI / BANK_TRANSFER / CHEQUE", "notes": "Any reference number or notes mentioned" }
+        Return ONLY valid JSON without any markdown formatting or extra text."""
+        response = client.models.generate_content(model='gemini-2.5-flash', contents=[image, prompt])
+        import json
+        text_resp = response.text.strip()
+        if text_resp.startswith("```json"): text_resp = text_resp[7:-3].strip()
+        elif text_resp.startswith("```"): text_resp = text_resp[3:-3].strip()
+        return json.loads(text_resp)
+    except Exception as e: return {"error": str(e)}
