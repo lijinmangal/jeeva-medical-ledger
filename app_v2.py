@@ -10,7 +10,7 @@ try:
     from database_v2 import (
         test_database_connection, init_clean_database, get_parties_df, save_party, update_party, delete_party,
         save_purchase_invoice, delete_multiple_purchase_invoices, get_purchase_invoices_df, get_party_dues_summary,
-        record_distributor_payment, delete_multiple_distributor_payments, get_distributor_payments_df,
+        record_distributor_payment, bulk_save_distributor_payments, delete_multiple_distributor_payments, get_distributor_payments_df,
         bulk_save_parties, bulk_save_purchase_invoices,
         extract_invoice_from_image, extract_payment_from_image, safe_float, safe_int
     )
@@ -74,7 +74,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
         st.metric("Total Market Dues Payable", f"₹{df_dues['total_due_amount'].sum():,.2f}")
         st.divider()
         
-        # RESTORED: Full 7-Day Dashboard Breakdown
         st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
         if not df_invoices.empty:
             unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
@@ -277,7 +276,7 @@ elif menu_choice == "📋 Party Master":
 # --- MODULE 4: PAYMENTS ---
 elif menu_choice == "💸 Payments":
     st.markdown("### 💸 Record & Manage Distributor Payments")
-    pay_tab_record, pay_tab_manage = st.tabs(["💸 Record New Payment", "🗑️ Manage & Delete Payments"])
+    pay_tab_record, pay_tab_bulk, pay_tab_manage = st.tabs(["💸 Record Single", "📊 Bulk Upload", "🗑️ Manage & Delete"])
     
     with pay_tab_record:
         df_parties_pay = get_parties_df()
@@ -285,7 +284,6 @@ elif menu_choice == "💸 Payments":
             pay_party = st.selectbox("Select Distributor to Pay", df_parties_pay["party_name"].tolist())
             party_id = int(df_parties_pay[df_parties_pay["party_name"] == pay_party].iloc[0]["party_id"])
 
-            # RESTORED: Specific Bill Clearing Checkboxes
             df_invoices = get_purchase_invoices_df()
             unpaid_party_bills = pd.DataFrame()
             if not df_invoices.empty:
@@ -317,6 +315,30 @@ elif menu_choice == "💸 Payments":
                     st.rerun()
         else:
             st.warning("Please register at least one purchase party first.")
+
+    with pay_tab_bulk:
+        uploaded_pay_file = st.file_uploader("Upload Payment Excel/CSV", type=["xlsx", "csv"], key=f"pay_upl_{rc}")
+        if uploaded_pay_file:
+            df_pay_upl = pd.read_csv(uploaded_pay_file) if uploaded_pay_file.name.endswith('.csv') else pd.read_excel(uploaded_pay_file, engine='openpyxl')
+            df_pay_upl.columns = [str(c).strip().lower().replace(" ", "_") for c in df_pay_upl.columns]
+            
+            df_master = get_parties_df()
+            existing_parties = set(df_master["party_name"].str.strip().str.title().tolist()) if not df_master.empty else set()
+            
+            df_pay_upl["Validation_Status"] = df_pay_upl.apply(lambda r: "✅ Valid" if str(r.get('party_name', '')).strip().title() in existing_parties else "❌ Party Not Found", axis=1)
+            st.dataframe(df_pay_upl.style.map(lambda v: "background-color: #e2efda; color: #375623;" if "✅" in str(v) else "background-color: #ffcccc; color: #c00000;", subset=['Validation_Status']), use_container_width=True)
+            
+            if (df_pay_upl["Validation_Status"] != "✅ Valid").sum() > 0:
+                st.error("⚠️ Import Blocked! Fix mismatched rows in your file or add the missing parties first.")
+            else:
+                if st.button("🚀 Confirm & Import All Payments"):
+                    count, errors = bulk_save_distributor_payments(df_pay_upl)
+                    if errors:
+                        for err in errors: st.error(err)
+                    elif count > 0:
+                        st.success(f"✅ Imported all {count} payments successfully!")
+                        st.session_state.reset_counter += 1
+                        st.rerun()
 
     with pay_tab_manage:
         df_all_pays = get_distributor_payments_df()
