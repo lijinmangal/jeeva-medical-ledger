@@ -9,7 +9,7 @@ try:
     import io
     from database_v2 import (
         test_database_connection, init_clean_database, get_parties_df, save_party, update_party, delete_party,
-        save_purchase_invoice, delete_purchase_invoice, get_purchase_invoices_df, get_party_dues_summary,
+        save_purchase_invoice, delete_multiple_purchase_invoices, get_purchase_invoices_df, get_party_dues_summary,
         record_distributor_payment, delete_distributor_payment, get_distributor_payments_df,
         bulk_save_parties, bulk_save_purchase_invoices, safe_float
     )
@@ -143,17 +143,19 @@ elif menu_choice == "📥 Add Purchase Bills":
             if not filtered_invs.empty:
                 st.dataframe(filtered_invs[["invoice_id", "party_name", "invoice_number", "bill_amount", "status"]], use_container_width=True, hide_index=True)
                 
-                inv_to_delete = st.selectbox(
-                    "Select Invoice to Delete", 
-                    filtered_invs.apply(lambda r: f"ID: {r['invoice_id']} | {r['party_name']} | Bill: {r['invoice_number']} | ₹{r['bill_amount']}", axis=1).tolist()
-                )
+                # Multi-select allows one or multiple bills to be checked off for deletion at the same time
+                options = filtered_invs.apply(lambda r: f"ID: {r['invoice_id']} | {r['party_name']} | Bill: {r['invoice_number']} | ₹{r['bill_amount']}", axis=1).tolist()
+                invs_to_delete = st.multiselect("Select Invoice(s) to Delete", options, key=f"multi_del_sel_{rc}")
                 
-                if st.button("🗑️ Permanently Delete Selected Bill", type="primary"):
-                    inv_id_val = int(inv_to_delete.split("|")[0].replace("ID:", "").strip())
-                    delete_purchase_invoice(inv_id_val)
-                    st.success("✅ Bill deleted successfully! Market dues updated.")
-                    st.session_state.reset_counter += 1
-                    st.rerun()
+                if st.button("🗑️ Permanently Delete Selected Bills", type="primary"):
+                    if invs_to_delete:
+                        inv_ids_val = [int(item.split("|")[0].replace("ID:", "").strip()) for item in invs_to_delete]
+                        delete_multiple_purchase_invoices(inv_ids_val)
+                        st.success(f"✅ {len(inv_ids_val)} Bill(s) deleted successfully! Market dues updated.")
+                        st.session_state.reset_counter += 1
+                        st.rerun()
+                    else:
+                        st.error("Please select at least one invoice from the dropdown to delete.")
             else:
                 st.info(f"No bills found for {filter_date.strftime('%Y-%m-%d')}.")
         else:
