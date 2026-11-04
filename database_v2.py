@@ -14,7 +14,6 @@ except ImportError:
 
 @st.cache_resource(show_spinner=False)
 def get_engine():
-    """Caches the database engine to prevent reconnecting on every click, eliminating lag."""
     db_url = ""
     if "SUPABASE_DB_URL" in st.secrets:
         db_url = st.secrets["SUPABASE_DB_URL"]
