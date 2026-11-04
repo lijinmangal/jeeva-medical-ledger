@@ -76,7 +76,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
         
         st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
         
-        # Calculate strict Old Dues (Remaining Opening Balance) separated from actual bills
         old_dues_list = []
         total_old_dues = 0.0
         for _, r in df_dues.iterrows():
@@ -85,7 +84,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 p_invs = df_invoices[(df_invoices['party_name'] == r['party_name']) & (df_invoices['status'] == 'UNPAID')]
                 party_unpaid_sum = p_invs['bill_amount'].sum()
             
-            # The remaining old due is Total Net Due minus the specific unpaid bills
             rem_old_due = max(0.0, r['total_due_amount'] - party_unpaid_sum)
             if rem_old_due > 0:
                 old_dues_list.append({"Party Name": r['party_name'], "Old Dues (₹)": rem_old_due, "As On Date": r['opening_as_on']})
@@ -109,7 +107,6 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
                 due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
 
-        # 5-Column Display with Old Dues isolated
         col_r0, col_r1, col_r2, col_r3, col_r4 = st.columns(5)
         with col_r0: st.info(f"🟣 **Old Dues**\n\nAmt: ₹{total_old_dues:,.2f}")
         with col_r1: st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum() if not due_overdue.empty else 0:,.2f}")
@@ -339,28 +336,47 @@ elif menu_choice == "💸 Payments":
             st.warning("Please register at least one purchase party first.")
 
     with pay_tab_bulk:
+        st.info("💡 **Format Required:** Your Excel file must contain these exact column names: `party_name`, `amount_paid`, `payment_date`, `payment_mode`, `notes`")
+        
+        template_df = pd.DataFrame({
+            "party_name": ["Example Pharma", "Health Care Distributors"],
+            "amount_paid": [5000.0, 12500.0],
+            "payment_date": [date.today().strftime("%Y-%m-%d"), date.today().strftime("%Y-%m-%d")],
+            "payment_mode": ["CASH", "UPI"],
+            "notes": ["Advance", "Bill 1234"]
+        })
+        t_io = io.BytesIO()
+        with pd.ExcelWriter(t_io, engine='openpyxl') as w: template_df.to_excel(w, index=False)
+        st.download_button("📥 Download Excel Template", t_io.getvalue(), file_name="payment_import_template.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        
         uploaded_pay_file = st.file_uploader("Upload Payment Excel/CSV", type=["xlsx", "csv"], key=f"pay_upl_{rc}")
         if uploaded_pay_file:
             df_pay_upl = pd.read_csv(uploaded_pay_file) if uploaded_pay_file.name.endswith('.csv') else pd.read_excel(uploaded_pay_file, engine='openpyxl')
             df_pay_upl.columns = [str(c).strip().lower().replace(" ", "_") for c in df_pay_upl.columns]
             
-            df_master = get_parties_df()
-            existing_parties = set(df_master["party_name"].str.strip().str.title().tolist()) if not df_master.empty else set()
+            required_cols = ["party_name", "amount_paid"]
+            missing_cols = [c for c in required_cols if c not in df_pay_upl.columns]
             
-            df_pay_upl["Validation_Status"] = df_pay_upl.apply(lambda r: "✅ Valid" if str(r.get('party_name', '')).strip().title() in existing_parties else "❌ Party Not Found", axis=1)
-            st.dataframe(df_pay_upl.style.map(lambda v: "background-color: #e2efda; color: #375623;" if "✅" in str(v) else "background-color: #ffcccc; color: #c00000;", subset=['Validation_Status']), use_container_width=True)
-            
-            if (df_pay_upl["Validation_Status"] != "✅ Valid").sum() > 0:
-                st.error("⚠️ Import Blocked! Fix mismatched rows in your file or add the missing parties first.")
+            if missing_cols:
+                st.error(f"❌ Missing required columns in your file: **{', '.join(missing_cols)}**. Please download the template above.")
             else:
-                if st.button("🚀 Confirm & Import All Payments"):
-                    count, errors = bulk_save_distributor_payments(df_pay_upl)
-                    if errors:
-                        for err in errors: st.error(err)
-                    elif count > 0:
-                        st.success(f"✅ Imported all {count} payments successfully!")
-                        st.session_state.reset_counter += 1
-                        st.rerun()
+                df_master = get_parties_df()
+                existing_parties = set(df_master["party_name"].str.strip().str.title().tolist()) if not df_master.empty else set()
+                
+                df_pay_upl["Validation_Status"] = df_pay_upl.apply(lambda r: "✅ Valid" if str(r.get('party_name', '')).strip().title() in existing_parties else "❌ Party Not Found", axis=1)
+                st.dataframe(df_pay_upl.style.map(lambda v: "background-color: #e2efda; color: #375623;" if "✅" in str(v) else "background-color: #ffcccc; color: #c00000;", subset=['Validation_Status']), use_container_width=True)
+                
+                if (df_pay_upl["Validation_Status"] != "✅ Valid").sum() > 0:
+                    st.error("⚠️ Import Blocked! Fix the misspelled party names in your Excel file or add the missing parties to your Party Master first.")
+                else:
+                    if st.button("🚀 Confirm & Import All Payments"):
+                        count, errors = bulk_save_distributor_payments(df_pay_upl)
+                        if errors:
+                            for err in errors: st.error(err)
+                        elif count > 0:
+                            st.success(f"✅ Imported all {count} payments successfully!")
+                            st.session_state.reset_counter += 1
+                            st.rerun()
 
     with pay_tab_manage:
         df_all_pays = get_distributor_payments_df()
