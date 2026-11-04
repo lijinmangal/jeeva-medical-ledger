@@ -66,16 +66,24 @@ rc = st.session_state.reset_counter
 
 # --- MODULE 1: DASHBOARD ---
 if menu_choice == "📊 Dashboard & Market Dues":
-    st.markdown("### 📊 Market Outstandings & Payment Reminders")
     df_dues = get_party_dues_summary()
     df_invoices = get_purchase_invoices_df()
 
     if not df_dues.empty:
-        st.metric("Total Market Dues Payable", f"₹{df_dues['total_due_amount'].sum():,.2f}")
-        st.divider()
+        total_net_dues = df_dues['total_due_amount'].sum()
         
-        st.markdown("#### 🚨 Manager's Payment Reminders & Date-wise Urgency")
+        # 1. TOTAL OUTSTANDINGS PROMINENT DISPLAY
+        st.markdown(f"""
+        <div style="background-color:#f0f2f6;padding:20px;border-radius:10px;border-left:6px solid #0056b3;margin-bottom:25px;">
+            <h3 style="margin:0;color:#333;font-family:sans-serif;">Total Market Outstandings</h3>
+            <h1 style="margin:0;color:#0056b3;font-size:42px;">₹ {total_net_dues:,.2f}</h1>
+            <p style="margin:0;color:#555;font-size:14px;margin-top:5px;">Total net payable (All Old Dues + All Unpaid Bills - Total Payments)</p>
+        </div>
+        """, unsafe_allow_html=True)
         
+        st.markdown("#### 🚨 Payment Action Board (Prepare Funds)")
+        
+        # Smart Math for Old Dues
         old_dues_list = []
         total_old_dues = 0.0
         for _, r in df_dues.iterrows():
@@ -95,6 +103,7 @@ if menu_choice == "📊 Dashboard & Market Dues":
         due_tomorrow = pd.DataFrame()
         due_overdue = pd.DataFrame()
         due_upcoming = pd.DataFrame()
+        total_upcoming_week = 0.0
         
         if not df_invoices.empty:
             unpaid_invoices = df_invoices[df_invoices["status"] == "UNPAID"].copy()
@@ -106,16 +115,27 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 due_tomorrow = unpaid_invoices[unpaid_invoices["days_left"] == 1]
                 due_overdue = unpaid_invoices[unpaid_invoices["days_left"] < 0]
                 due_upcoming = unpaid_invoices[(unpaid_invoices["days_left"] > 1) & (unpaid_invoices["days_left"] <= 7)]
+                
+                total_upcoming_week = due_today['bill_amount'].sum() + due_tomorrow['bill_amount'].sum() + due_upcoming['bill_amount'].sum()
 
-        col_r0, col_r1, col_r2, col_r3, col_r4 = st.columns(5)
-        with col_r0: st.info(f"🟣 **Old Dues**\n\nAmt: ₹{total_old_dues:,.2f}")
-        with col_r1: st.error(f"🔴 **Overdue ({len(due_overdue)})**\n\nAmt: ₹{due_overdue['bill_amount'].sum() if not due_overdue.empty else 0:,.2f}")
-        with col_r2: st.warning(f"🟠 **Today ({len(due_today)})**\n\nAmt: ₹{due_today['bill_amount'].sum() if not due_today.empty else 0:,.2f}")
-        with col_r3: st.info(f"🟡 **Tomorrow ({len(due_tomorrow)})**\n\nAmt: ₹{due_tomorrow['bill_amount'].sum() if not due_tomorrow.empty else 0:,.2f}")
-        with col_r4: st.success(f"🟢 **Next 7d ({len(due_upcoming)})**\n\nAmt: ₹{due_upcoming['bill_amount'].sum() if not due_upcoming.empty else 0:,.2f}")
+        # 2. ISOLATED PRIORITY BLOCKS
+        col_A, col_B, col_C = st.columns(3)
+        with col_A: st.info(f"🟣 **Uncleared Old Dues**\n\n### ₹ {total_old_dues:,.2f}\n*(Opening balances w/o specific dates)*")
+        with col_B: st.error(f"🔴 **Already Overdue Bills**\n\n### ₹ {due_overdue['bill_amount'].sum() if not due_overdue.empty else 0:,.2f}\n*(Requires immediate clearance)*")
+        with col_C: st.warning(f"📆 **Upcoming Week Total**\n\n### ₹ {total_upcoming_week:,.2f}\n*(Sum of all bills due in next 7 days)*")
 
-        with st.expander("🔍 View Detailed Date-Wise Pending Bills Breakdown"):
-            rem_tab_old, rem_tab_od, rem_tab_tod, rem_tab_tom, rem_tab_fut = st.tabs(["🟣 Old Dues", "🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Upcoming (7d)"])
+        # 3. INTERACTIVE BAR CHART FOR UPCOMING WEEK
+        if total_upcoming_week > 0:
+            st.markdown("##### 📈 Daily Cash Required (Next 7 Days)")
+            week_bills = unpaid_invoices[(unpaid_invoices["days_left"] >= 0) & (unpaid_invoices["days_left"] <= 7)]
+            if not week_bills.empty:
+                chart_data = week_bills.groupby("due_date")["bill_amount"].sum().reset_index()
+                chart_data.rename(columns={"due_date": "Date", "bill_amount": "Amount Due (₹)"}, inplace=True)
+                st.bar_chart(chart_data.set_index("Date"), color="#ffaa00")
+
+        # 4. DETAILED BREAKDOWN TABS
+        with st.expander("🔍 View Detailed List of Pending Bills & Dues"):
+            rem_tab_old, rem_tab_od, rem_tab_tod, rem_tab_tom, rem_tab_fut = st.tabs(["🟣 Old Dues", "🔴 Overdue", "🟠 Today", "🟡 Tomorrow", "🟢 Next 7 Days"])
             
             with rem_tab_old:
                 if not df_old_dues.empty: st.dataframe(df_old_dues, use_container_width=True, hide_index=True)
@@ -134,11 +154,12 @@ if menu_choice == "📊 Dashboard & Market Dues":
                 else: st.info("No upcoming bills in the next 7 days.")
         
         st.divider()
-        search_party = st.text_input("🔍 Search Party Name:")
+        st.markdown("#### 🏢 Individual Party Ledgers")
+        search_party = st.text_input("🔍 Search Party Name to view specific ledger:")
         filtered_dues = df_dues[df_dues["party_name"].str.contains(search_party, case=False, na=False)] if search_party else df_dues
 
         for _, party_row in filtered_dues.iterrows():
-            with st.expander(f"🏢 **{party_row['party_name']}** | Net Due: **₹{party_row['total_due_amount']:,.2f}** — {party_row['Payment_Urgency']}"):
+            with st.expander(f"**{party_row['party_name']}** | Net Due: **₹{party_row['total_due_amount']:,.2f}** — {party_row['Payment_Urgency']}"):
                 c1, c2, c3 = st.columns(3)
                 c1.markdown(f"🔹 **Opening:** ₹{party_row['opening_balance']:,.2f} *(As on {party_row['opening_as_on']})*")
                 c2.markdown(f"📦 **Bills:** ₹{party_row['total_bills']:,.2f}")
