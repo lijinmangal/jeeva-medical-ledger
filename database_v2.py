@@ -12,29 +12,20 @@ try:
 except ImportError:
     AI_AVAILABLE = False
 
+@st.cache_resource(show_spinner=False)
 def get_engine():
-    """Dynamically fetches credentials and returns a secure SQLAlchemy engine."""
     db_url = ""
-    try:
-        # Check Streamlit secrets first safely
-        if "SUPABASE_DB_URL" in st.secrets:
-            db_url = st.secrets["SUPABASE_DB_URL"]
-    except Exception:
-        pass
-        
+    if "SUPABASE_DB_URL" in st.secrets:
+        db_url = st.secrets["SUPABASE_DB_URL"]
     if not db_url:
         db_url = os.environ.get("SUPABASE_DB_URL", "")
-        
     if not db_url:
         raise ValueError("SUPABASE_DB_URL is missing from Streamlit secrets.")
         
     db_url = db_url.strip()
-    
-    # Ensure explicit psycopg2 driver
     if db_url.startswith("postgresql://") and "+psycopg2" not in db_url:
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
         
-    # Crucial connection arguments for Cloud PostgreSQL to prevent timeouts
     return create_engine(db_url, pool_pre_ping=True, connect_args={'sslmode': 'require', 'connect_timeout': 10})
 
 def test_database_connection():
@@ -113,47 +104,58 @@ def delete_party(party_id):
 
 def bulk_save_parties(df_parties):
     df_parties.columns = [str(c).strip().lower().replace(" ", "_") for c in df_parties.columns]
-    success_count = 0
-    errors = []
-    with get_engine().begin() as conn:
-        for idx, row in df_parties.iterrows():
-            try:
-                name = str(row.get('party_name', '')).strip().title()
-                if not name or name == "Nan": continue
-                conn.execute(text("""
-                    INSERT INTO parties (party_name, credit_period_days, opening_balance, as_on_date, created_at)
-                    VALUES (:name, :credit_days, :opening_bal, :as_on_date, :created_at)
-                    ON CONFLICT (party_name) DO NOTHING
-                """), {"name": name, "credit_days": safe_int(row.get('credit_period_days'), 15), "opening_bal": safe_float(row.get('opening_balance'), 0.0), "as_on_date": parse_date(row.get('as_on_date')), "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-                success_count += 1
-            except Exception as e: errors.append(str(e))
-    return success_count, errors
+    errors, valid_rows = [], []
+    for idx, row in df_parties.iterrows():
+        name = str(row.get('party_name', '')).strip().title()
+        if not name or name == "Nan":
+            errors.append(f"Row {idx+2}: Missing Party Name")
+            continue
+        valid_rows.append({
+            "name": name, "credit_days": safe_int(row.get('credit_period_days'), 15),
+            "opening_bal": safe_float(row.get('opening_balance'), 0.0), "as_on_date": parse_date(row.get('as_on_date')),
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+    if errors: return 0, errors 
+    if valid_rows:
+        with get_engine().begin() as conn:
+            conn.execute(text("""
+                INSERT INTO parties (party_name, credit_period_days, opening_balance, as_on_date, created_at)
+                VALUES (:name, :credit_days, :opening_bal, :as_on_date, :created_at)
+                ON CONFLICT (party_name) DO NOTHING
+            """), valid_rows)
+    return len(valid_rows), []
 
 def save_purchase_invoice(party_id, inv_no, inv_date, credit_days, amount, created_date):
     due_date_str = (datetime.strptime(inv_date, "%Y-%m-%d") + timedelta(days=credit_days)).strftime("%Y-%m-%d")
     with get_engine().begin() as conn:
         conn.execute(text("INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at) VALUES (:p, :no, :dt, :due, :amt, 'UNPAID', :crt)"), {"p": party_id, "no": inv_no, "dt": inv_date, "due": due_date_str, "amt": amount, "crt": created_date})
 
-def bulk_save_purchase_invoices(df_invoices):
-    df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
-    success_count = 0
-    errors = []
+def delete_purchase_invoice(invoice_id):
     with get_engine().begin() as conn:
-        for idx, row in df_invoices.iterrows():
-            try:
-                party_name = str(row.get('party_name', '')).strip().title()
-                inv_no = str(row.get('invoice_number', '')).strip()
-                amt = safe_float(row.get('bill_amount'), 0.0)
-                if not party_name or not inv_no or amt <= 0: continue
-                res = conn.execute(text("SELECT party_id, credit_period_days FROM parties WHERE party_name = :p"), {"p": party_name}).fetchone()
-                if res:
-                    inv_date = parse_date(row.get('invoice_date'))
-                    due = (datetime.strptime(inv_date, "%Y-%m-%d") + timedelta(days=int(res[1]))).strftime("%Y-%m-%d")
-                    conn.execute(text("INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at) VALUES (:p, :no, :dt, :due, :amt, 'UNPAID', :crt)"), {"p": res[0], "no": inv_no, "dt": inv_date, "due": due, "amt": amt, "crt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-                    success_count += 1
-                else: errors.append(f"Row {idx+2}: Party not found")
-            except Exception as e: errors.append(str(e))
-    return success_count, errors
+        conn.execute(text("DELETE FROM purchase_invoices WHERE invoice_id = :inv_id"), {"inv_id": invoice_id})
+
+def bulk_save_purchase_invoices(df_invoices):
+    parties_df = get_parties_df()
+    party_dict = {str(row['party_name']).strip().title(): (row['party_id'], row['credit_period_days']) for _, row in parties_df.iterrows()}
+    df_invoices.columns = [str(c).strip().lower().replace(" ", "_") for c in df_invoices.columns]
+    errors, valid_rows = [], []
+    for idx, row in df_invoices.iterrows():
+        party_name, inv_no, amt = str(row.get('party_name', '')).strip().title(), str(row.get('invoice_number', '')).strip(), safe_float(row.get('bill_amount'), 0.0)
+        if not party_name or party_name == "Nan" or not inv_no or amt <= 0:
+            errors.append(f"Row {idx+2}: Missing fields or invalid amount.")
+            continue
+        if party_name not in party_dict:
+            errors.append(f"Row {idx+2}: Party '{party_name}' not found in Master List.")
+            continue
+        p_id, credit_days = party_dict[party_name]
+        inv_date = parse_date(row.get('invoice_date'))
+        due = (datetime.strptime(inv_date, "%Y-%m-%d") + timedelta(days=int(credit_days))).strftime("%Y-%m-%d")
+        valid_rows.append({"p": p_id, "no": inv_no, "dt": inv_date, "due": due, "amt": amt, "crt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    if errors: return 0, errors 
+    if valid_rows:
+        with get_engine().begin() as conn:
+            conn.execute(text("INSERT INTO purchase_invoices (party_id, invoice_number, invoice_date, due_date, bill_amount, status, created_at) VALUES (:p, :no, :dt, :due, :amt, 'UNPAID', :crt)"), valid_rows)
+    return len(valid_rows), []
 
 def get_purchase_invoices_df() -> pd.DataFrame:
     try: return pd.read_sql("SELECT i.invoice_id, p.party_id, p.party_name, i.invoice_number, i.invoice_date, i.due_date, i.bill_amount, i.status FROM purchase_invoices i JOIN parties p ON i.party_id = p.party_id ORDER BY i.due_date ASC", get_engine())
@@ -178,13 +180,10 @@ def get_party_dues_summary() -> pd.DataFrame:
     invoices_df = get_purchase_invoices_df()
     payments_df = get_distributor_payments_df()
     summary_list = []
-    
     for _, party in parties_df.iterrows():
         p_id, p_name, opening_bal = party["party_id"], party["party_name"], party["opening_balance"]
-        
         total_bills = invoices_df[invoices_df["party_id"] == p_id]["bill_amount"].sum() if not invoices_df.empty else 0.0
         total_payments = payments_df[payments_df["party_id"] == p_id]["amount_paid"].sum() if not payments_df.empty else 0.0
-        
         summary_list.append({
             "party_name": p_name, "opening_balance": opening_bal, "opening_as_on": party["as_on_date"],
             "total_bills": total_bills, "total_payments": total_payments,
@@ -192,6 +191,3 @@ def get_party_dues_summary() -> pd.DataFrame:
             "Payment_Urgency": "Check Bills"
         })
     return pd.DataFrame(summary_list).sort_values(by="total_due_amount", ascending=False)
-
-def extract_invoice_from_image(image_file): return {"error": "AI offline"}
-def extract_payment_from_image(image_file): return {"error": "AI offline"}
